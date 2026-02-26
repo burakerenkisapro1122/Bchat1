@@ -1,0 +1,5 @@
+{
+  "name": "B-Chat",
+  "description": "A real-time chat application with DMs, group chats, media sharing, and calls.",
+  "requestFramePermissions": ["camera", "microphone"]
+}
