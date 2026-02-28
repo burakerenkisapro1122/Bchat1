@@ -25,7 +25,8 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
   const [activeCall, setActiveCall] = useState<'audio' | 'video' | null>(null);
   const [showMediaMenu, setShowMediaMenu] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastTypingBroadcastRef = useRef<number>(0);
+  const typingTimeoutsRef = useRef<{ [key: string]: NodeJS.Timeout }>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const channelRef = useRef<any>(null);
   
@@ -71,10 +72,16 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
             return [...prev, payload.username];
           });
           
-          // Remove typing indicator after 3 seconds
-          setTimeout(() => {
+          // Clear existing timeout for this user
+          if (typingTimeoutsRef.current[payload.username]) {
+            clearTimeout(typingTimeoutsRef.current[payload.username]);
+          }
+
+          // Set new timeout to remove typing indicator
+          typingTimeoutsRef.current[payload.username] = setTimeout(() => {
             setTypingUsers(prev => prev.filter(u => u !== payload.username));
-          }, 3000);
+            delete typingTimeoutsRef.current[payload.username];
+          }, 4000);
         }
       })
       .subscribe();
@@ -103,12 +110,17 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
   };
 
   const handleTyping = () => {
-    if (channelRef.current) {
-      channelRef.current.send({
-        type: 'broadcast',
-        event: 'typing',
-        payload: { userId: currentUser.id, username: currentUser.username },
-      });
+    const now = Date.now();
+    // Throttle typing broadcasts to every 2 seconds
+    if (now - lastTypingBroadcastRef.current > 2000) {
+      if (channelRef.current) {
+        channelRef.current.send({
+          type: 'broadcast',
+          event: 'typing',
+          payload: { userId: currentUser.id, username: currentUser.username },
+        });
+        lastTypingBroadcastRef.current = now;
+      }
     }
   };
 
@@ -322,9 +334,16 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
               );
             })}
             {typingUsers.length > 0 && (
-              <div className="flex justify-start mb-4">
-                <div className="bg-white px-3 py-1 rounded-full text-xs text-gray-500 italic shadow-sm">
-                  {typingUsers.join(', ')} {typingUsers.length === 1 ? 'is' : 'are'} typing...
+              <div className="flex justify-start mb-4 animate-in fade-in slide-in-from-bottom-2">
+                <div className="bg-white px-3 py-1.5 rounded-2xl rounded-tl-none text-xs text-gray-500 shadow-sm flex items-center gap-2">
+                  <div className="flex gap-1">
+                    <span className="w-1 h-1 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                    <span className="w-1 h-1 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                    <span className="w-1 h-1 bg-gray-400 rounded-full animate-bounce"></span>
+                  </div>
+                  <span className="italic">
+                    {typingUsers.join(', ')} {typingUsers.length === 1 ? 'yazıyor' : 'yazıyorlar'}...
+                  </span>
                 </div>
               </div>
             )}
