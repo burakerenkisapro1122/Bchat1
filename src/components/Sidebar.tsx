@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase, Conversation, Profile } from '../lib/supabase';
-import { Search, MoreVertical, MessageSquare, Users, LogOut, User, Settings } from 'lucide-react';
+import { Search, MoreVertical, MessageSquare, Users, LogOut, User, Settings, Check, CheckCheck } from 'lucide-react';
 import { cn, getInitials } from '../lib/utils';
 import GroupModal from './GroupModal';
 import ProfileModal from './ProfileModal';
 import DetailsModal from './DetailsModal';
+import { usePresence } from '../lib/usePresence';
 
 interface SidebarProps {
   currentUser: Profile;
@@ -21,6 +22,26 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [selectedUserDetails, setSelectedUserDetails] = useState<Profile | null>(null);
+  
+  const { isOnline } = usePresence(currentUser.id);
+
+  const sortedConversations = useMemo(() => {
+    return [...conversations].sort((a, b) => {
+      // If it's a DM, check online status
+      const otherA = !a.is_group ? a.participants?.find(p => p.user_id !== currentUser.id)?.user_id : null;
+      const otherB = !b.is_group ? b.participants?.find(p => p.user_id !== currentUser.id)?.user_id : null;
+      
+      const onlineA = otherA ? isOnline(otherA) : false;
+      const onlineB = otherB ? isOnline(otherB) : false;
+
+      if (onlineA && !onlineB) return -1;
+      if (!onlineA && onlineB) return 1;
+
+      const dateA = a.last_message?.created_at || a.created_at;
+      const dateB = b.last_message?.created_at || b.created_at;
+      return new Date(dateB).getTime() - new Date(dateA).getTime();
+    });
+  }, [conversations, isOnline, currentUser.id]);
 
   useEffect(() => {
     fetchConversations();
@@ -151,9 +172,17 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
       .ilike('username', `%${query}%`)
       .eq('is_visible', true)
       .neq('id', currentUser.id)
-      .limit(5);
+      .limit(10);
 
-    setSearchResults(data || []);
+    const sortedResults = (data || []).sort((a, b) => {
+      const onlineA = isOnline(a.id);
+      const onlineB = isOnline(b.id);
+      if (onlineA && !onlineB) return -1;
+      if (!onlineA && onlineB) return 1;
+      return 0;
+    });
+
+    setSearchResults(sortedResults);
   };
 
   const startDM = async (targetUser: Profile) => {
@@ -267,10 +296,15 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
               className="flex items-center gap-3 px-4 py-3 hover:bg-[#f5f6f6] cursor-pointer"
               onClick={() => startDM(user)}
             >
-              <img src={user.avatar_url || ''} className="w-12 h-12 rounded-full" />
+              <div className="relative">
+                <img src={user.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.username}`} className="w-12 h-12 rounded-full" />
+                {isOnline(user.id) && (
+                  <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-[#25d366] border-2 border-white rounded-full"></div>
+                )}
+              </div>
               <div className="flex-1 border-b border-gray-100 pb-3">
                 <p className="font-medium">{user.username}</p>
-                <p className="text-sm text-gray-500 truncate">{user.bio || 'Hey there! I am using WhatsApp.'}</p>
+                <p className="text-sm text-gray-500 truncate">{user.bio || 'Hey there! I am using B-Chat.'}</p>
               </div>
             </div>
           ))}
@@ -283,21 +317,23 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
           <div className="flex justify-center p-4">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#25d366]"></div>
           </div>
-        ) : conversations.length === 0 ? (
+        ) : sortedConversations.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full p-8 text-center text-gray-500">
             <MessageSquare className="w-12 h-12 mb-4 opacity-20" />
             <p>No chats yet. Search for someone to start talking!</p>
           </div>
         ) : (
-          conversations.map((conv) => {
+          sortedConversations.map((conv) => {
             const otherParticipant = !conv.is_group 
               ? conv.participants?.find(p => p.user_id !== currentUser.id)?.profile
               : null;
             
             const displayName = conv.is_group ? conv.name : otherParticipant?.username;
             const displayAvatar = conv.is_group 
-              ? `https://api.dicebear.com/7.x/initials/svg?seed=${conv.name}`
-              : otherParticipant?.avatar_url;
+              ? conv.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${conv.name}`
+              : otherParticipant?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${otherParticipant?.username}`;
+
+            const isOtherOnline = !conv.is_group && otherParticipant ? isOnline(otherParticipant.id) : false;
 
             return (
               <div
@@ -308,7 +344,12 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
                 )}
                 onClick={() => onSelectConversation(conv)}
               >
-                <img src={displayAvatar || ''} className="w-12 h-12 rounded-full object-cover" />
+                <div className="relative">
+                  <img src={displayAvatar || ''} className="w-12 h-12 rounded-full object-cover" />
+                  {isOtherOnline && (
+                    <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-[#25d366] border-2 border-white rounded-full"></div>
+                  )}
+                </div>
                 <div className="flex-1 border-b border-gray-100 pb-3 min-w-0">
                   <div className="flex justify-between items-center mb-1">
                     <p className="font-medium truncate">{displayName}</p>
@@ -318,9 +359,18 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
                       </span>
                     )}
                   </div>
-                  <p className="text-sm text-gray-500 truncate">
-                    {conv.last_message ? conv.last_message.content : 'No messages yet'}
-                  </p>
+                  <div className="flex items-center gap-1">
+                    {conv.last_message && conv.last_message.sender_id === currentUser.id && (
+                      conv.last_message.is_read ? (
+                        <CheckCheck className="w-4 h-4 text-[#53bdeb]" />
+                      ) : (
+                        <Check className="w-4 h-4 text-gray-400" />
+                      )
+                    )}
+                    <p className="text-sm text-gray-500 truncate">
+                      {conv.last_message ? conv.last_message.content : 'No messages yet'}
+                    </p>
+                  </div>
                 </div>
               </div>
             );

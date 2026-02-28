@@ -6,6 +6,8 @@ import { format } from 'date-fns';
 import DetailsModal from './DetailsModal';
 import CallModal from './CallModal';
 import GroupSettingsModal from './GroupSettingsModal';
+import { usePresence } from '../lib/usePresence';
+import { Check, CheckCheck } from 'lucide-react';
 
 interface ChatWindowProps {
   conversation: Conversation;
@@ -25,11 +27,15 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
   const scrollRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const channelRef = useRef<any>(null);
+  
+  const { isOnline } = usePresence(currentUser.id);
 
   useEffect(() => {
     fetchMessages();
+    markMessagesAsRead();
     
-    // Subscribe to new messages and typing indicators
+    // Subscribe to new messages, typing indicators, and read status updates
     const channelId = conversation.is_group ? `group:${conversation.id}` : `chat:${conversation.id}`;
     const channel = supabase
       .channel(channelId)
@@ -43,6 +49,20 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
       }, (payload: any) => {
         const msg = payload.new as Message;
         fetchSenderProfile(msg);
+        if (msg.sender_id !== currentUser.id) {
+          markMessagesAsRead();
+        }
+      })
+      .on('postgres_changes' as any, {
+        event: 'UPDATE',
+        table: 'messages',
+        schema: 'public',
+        filter: conversation.is_group 
+          ? `group_id=eq.${conversation.id}` 
+          : `conversation_id=eq.${conversation.id}`
+      }, (payload: any) => {
+        const updatedMsg = payload.new as Message;
+        setMessages(prev => prev.map(m => m.id === updatedMsg.id ? { ...m, is_read: updatedMsg.is_read } : m));
       })
       .on('broadcast' as any, { event: 'typing' }, ({ payload }: any) => {
         if (payload.userId !== currentUser.id) {
@@ -58,19 +78,38 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
         }
       })
       .subscribe();
+    
+    channelRef.current = channel;
 
     return () => {
       supabase.removeChannel(channel);
+      channelRef.current = null;
     };
   }, [conversation.id]);
 
+  const markMessagesAsRead = async () => {
+    try {
+      const { error } = await supabase
+        .from('messages')
+        .update({ is_read: true })
+        .eq(conversation.is_group ? 'group_id' : 'conversation_id', conversation.id)
+        .neq('sender_id', currentUser.id)
+        .eq('is_read', false);
+
+      if (error) throw error;
+    } catch (err) {
+      console.error('Error marking messages as read:', err);
+    }
+  };
+
   const handleTyping = () => {
-    const channelId = conversation.is_group ? `group:${conversation.id}` : `chat:${conversation.id}`;
-    supabase.channel(channelId).send({
-      type: 'broadcast',
-      event: 'typing',
-      payload: { userId: currentUser.id, username: currentUser.username },
-    });
+    if (channelRef.current) {
+      channelRef.current.send({
+        type: 'broadcast',
+        event: 'typing',
+        payload: { userId: currentUser.id, username: currentUser.username },
+      });
+    }
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -172,7 +211,9 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
           <div>
             <p className="font-medium text-gray-800">{displayName}</p>
             <p className="text-xs text-gray-500">
-              {conversation.is_group ? `${conversation.participants?.length} members` : 'online'}
+              {conversation.is_group 
+                ? `${conversation.participants?.length} members` 
+                : (otherParticipant && isOnline(otherParticipant.id) ? 'çevrimiçi' : 'çevrimdışı')}
             </p>
           </div>
         </div>
@@ -251,13 +292,30 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
                         {msg.sender?.username}
                       </p>
                     )}
-                    <div className="flex items-end gap-2">
-                      <p className="text-[14.2px] text-gray-800 break-words leading-tight">
-                        {msg.content}
-                      </p>
-                      <span className="text-[10px] text-gray-500 whitespace-nowrap mt-1">
+                    <div className="flex flex-col gap-1">
+                      {msg.message_type === 'image' && (
+                        <img src={msg.media_url!} className="max-w-full rounded-md mb-1 cursor-pointer hover:opacity-90" />
+                      )}
+                      {msg.message_type === 'video' && (
+                        <video src={msg.media_url!} controls className="max-w-full rounded-md mb-1" />
+                      )}
+                      {msg.content && (
+                        <p className="text-[14.2px] text-gray-800 break-words leading-tight">
+                          {msg.content}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1 justify-end mt-1">
+                      <span className="text-[10px] text-gray-500 whitespace-nowrap">
                         {format(new Date(msg.created_at), 'HH:mm')}
                       </span>
+                      {isMe && (
+                        msg.is_read ? (
+                          <CheckCheck className="w-3.5 h-3.5 text-[#53bdeb]" />
+                        ) : (
+                          <Check className="w-3.5 h-3.5 text-gray-400" />
+                        )
+                      )}
                     </div>
                   </div>
                 </div>

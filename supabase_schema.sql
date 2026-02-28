@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
   avatar_url TEXT,
   bio TEXT,
   is_visible BOOLEAN DEFAULT TRUE,
+  last_seen_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
 
@@ -114,6 +115,16 @@ CREATE POLICY "Messages viewable by participants" ON messages FOR SELECT
   );
 DROP POLICY IF EXISTS "Participants can send messages" ON messages;
 CREATE POLICY "Participants can send messages" ON messages FOR INSERT
+  WITH CHECK (
+    (conversation_id IS NOT NULL AND EXISTS (SELECT 1 FROM conversation_participants WHERE conversation_id = messages.conversation_id AND user_id = auth.uid())) OR
+    (group_id IS NOT NULL AND EXISTS (SELECT 1 FROM group_members WHERE group_id = messages.group_id AND user_id = auth.uid()))
+  );
+DROP POLICY IF EXISTS "Participants can update read status" ON messages;
+CREATE POLICY "Participants can update read status" ON messages FOR UPDATE
+  USING (
+    (conversation_id IS NOT NULL AND EXISTS (SELECT 1 FROM conversation_participants WHERE conversation_id = messages.conversation_id AND user_id = auth.uid())) OR
+    (group_id IS NOT NULL AND EXISTS (SELECT 1 FROM group_members WHERE group_id = messages.group_id AND user_id = auth.uid()))
+  )
   WITH CHECK (
     (conversation_id IS NOT NULL AND EXISTS (SELECT 1 FROM conversation_participants WHERE conversation_id = messages.conversation_id AND user_id = auth.uid())) OR
     (group_id IS NOT NULL AND EXISTS (SELECT 1 FROM group_members WHERE group_id = messages.group_id AND user_id = auth.uid()))

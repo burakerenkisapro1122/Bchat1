@@ -15,6 +15,7 @@ export type Profile = {
   avatar_url: string | null;
   bio: string | null;
   is_visible: boolean;
+  last_seen_at: string | null;
   updated_at: string;
 };
 
