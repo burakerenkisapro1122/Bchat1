@@ -1,16 +1,24 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase, Profile, Conversation } from './lib/supabase';
 import Auth from './components/Auth';
 import Sidebar from './components/Sidebar';
 import ChatWindow from './components/ChatWindow';
+import CallModal from './components/CallModal';
 import { MessageSquare } from 'lucide-react';
+import { getPeer } from './lib/peer';
+import { MediaConnection, Peer } from 'peerjs';
 
 export default function App() {
   const [session, setSession] = useState<any>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   const [loading, setLoading] = useState(true);
-
+  const [incomingCall, setIncomingCall] = useState<{
+    type: 'audio' | 'video';
+    caller: Profile;
+    call: MediaConnection;
+  } | null>(null);
+  
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
@@ -41,8 +49,40 @@ export default function App() {
       console.error('Error fetching profile:', error);
     } else {
       setProfile(data);
+      initPeer(data);
     }
     setLoading(false);
+  };
+
+  const initPeer = (user: Profile) => {
+    const peer = getPeer(user.id);
+    if (!peer) return;
+
+    peer.on('call', async (call: MediaConnection) => {
+      // Fetch caller profile
+      const { data: caller } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', call.peer)
+        .single();
+      
+      if (caller) {
+        setIncomingCall({
+          type: call.metadata?.type || 'video',
+          caller,
+          call
+        });
+      }
+    });
+
+    peer.on('error', (err) => {
+      console.error('Peer global error:', err);
+      if (err.type === 'peer-unavailable') {
+        console.warn('Target peer is not available.');
+      } else if (err.type === 'server-error') {
+        console.error('PeerJS server error. Attempting to reconnect...');
+      }
+    });
   };
 
   if (loading) {
@@ -99,6 +139,18 @@ export default function App() {
           )}
         </div>
       </div>
+
+      {incomingCall && (
+        <CallModal 
+          type={incomingCall.type}
+          targetUserId={incomingCall.caller.id}
+          targetName={incomingCall.caller.username}
+          targetAvatar={incomingCall.caller.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${incomingCall.caller.username}`}
+          onClose={() => setIncomingCall(null)}
+          currentUser={profile}
+          incomingCall={incomingCall.call}
+        />
+      )}
     </div>
   );
 }

@@ -49,10 +49,19 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
     const refreshHandler = () => fetchConversations();
     window.addEventListener('refresh-conversations', refreshHandler);
 
-    // Subscribe to new messages to update last message in sidebar
+    // Subscribe to new messages, participant changes, and group changes
     const channel = supabase
       .channel('sidebar-updates')
-      .on('postgres_changes' as any, { event: 'INSERT', table: 'messages', schema: 'public' }, () => {
+      .on('postgres_changes' as any, { event: '*', table: 'messages', schema: 'public' }, () => {
+        fetchConversations();
+      })
+      .on('postgres_changes' as any, { event: '*', table: 'conversation_participants', schema: 'public' }, () => {
+        fetchConversations();
+      })
+      .on('postgres_changes' as any, { event: '*', table: 'groups', schema: 'public' }, () => {
+        fetchConversations();
+      })
+      .on('postgres_changes' as any, { event: '*', table: 'group_members', schema: 'public' }, () => {
         fetchConversations();
       })
       .subscribe();

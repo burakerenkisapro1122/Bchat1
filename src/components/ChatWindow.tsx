@@ -49,7 +49,28 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
           : `conversation_id=eq.${conversation.id}` 
       }, (payload: any) => {
         const msg = payload.new as Message;
-        fetchSenderProfile(msg);
+        setMessages(prev => {
+          // 1. Check if this exact message ID is already there
+          if (prev.some(m => m.id === msg.id)) return prev;
+          
+          // 2. Check if this is a message we just sent optimistically (matching content and sender)
+          // This handles the race where the subscription arrives before the DB response in handleSendMessage
+          const isOptimisticMatch = prev.some(m => 
+            m.sender_id === msg.sender_id && 
+            m.content === msg.content && 
+            (typeof m.id === 'string' && m.id.length > 30) // likely a UUID
+          );
+          
+          if (isOptimisticMatch) {
+            // Replace the optimistic one with the real one
+            fetchSenderProfile(msg, true); // true means replace
+            return prev;
+          }
+
+          fetchSenderProfile(msg);
+          return prev;
+        });
+        
         if (msg.sender_id !== currentUser.id) {
           markMessagesAsRead();
         }
@@ -151,14 +172,34 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
     }
   };
 
-  const fetchSenderProfile = async (msg: Message) => {
+  const fetchSenderProfile = async (msg: Message, replaceOptimistic = false) => {
     const { data: profile } = await supabase
       .from('users')
       .select('*')
       .eq('id', msg.sender_id)
       .single();
     
-    setMessages(prev => [...prev, { ...msg, sender: profile }]);
+    setMessages(prev => {
+      if (replaceOptimistic) {
+        // Find the most recent optimistic message from this sender with this content
+        const idx = [...prev].reverse().findIndex(m => 
+          m.sender_id === msg.sender_id && 
+          m.content === msg.content && 
+          (typeof m.id === 'string' && m.id.length > 30)
+        );
+        
+        if (idx !== -1) {
+          const realIdx = prev.length - 1 - idx;
+          const newMessages = [...prev];
+          newMessages[realIdx] = { ...msg, sender: profile };
+          return newMessages;
+        }
+      }
+      
+      // If not replacing or not found, just append if not already there
+      if (prev.some(m => m.id === msg.id)) return prev;
+      return [...prev, { ...msg, sender: profile }];
+    });
   };
 
   const handleSendMessage = async (e?: React.FormEvent, mediaUrl?: string, type: MessageType = 'text') => {
@@ -169,18 +210,42 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
     setNewMessage('');
     setShowMediaMenu(false);
 
+    // Optimistic update
+    const tempId = crypto.randomUUID();
+    const optimisticMsg: Message = {
+      id: tempId,
+      content,
+      sender_id: currentUser.id,
+      created_at: new Date().toISOString(),
+      message_type: type,
+      media_url: mediaUrl,
+      is_read: false,
+      sender: currentUser,
+      conversation_id: !conversation.is_group ? conversation.id : undefined,
+      group_id: conversation.is_group ? conversation.id : undefined
+    };
+    
+    setMessages(prev => [...prev, optimisticMsg]);
+
     try {
       const messageData = conversation.is_group 
         ? { group_id: conversation.id, sender_id: currentUser.id, content, message_type: type, media_url: mediaUrl }
         : { conversation_id: conversation.id, sender_id: currentUser.id, content, message_type: type, media_url: mediaUrl };
 
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('messages')
-        .insert([messageData]);
+        .insert([messageData])
+        .select()
+        .single();
 
       if (error) throw error;
+      
+      // Replace optimistic message with real one
+      setMessages(prev => prev.map(m => m.id === tempId ? { ...data, sender: currentUser } : m));
     } catch (err) {
       console.error('Error sending message:', err);
+      // Remove optimistic message on error
+      setMessages(prev => prev.filter(m => m.id !== tempId));
     }
   };
 
@@ -230,8 +295,26 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
           </div>
         </div>
         <div className="flex items-center gap-5 text-gray-500">
-          <Video className="w-5 h-5 cursor-pointer hover:text-gray-700" onClick={() => setActiveCall('video')} />
-          <Phone className="w-5 h-5 cursor-pointer hover:text-gray-700" onClick={() => setActiveCall('audio')} />
+          <Video 
+            className={cn(
+              "w-5 h-5 cursor-pointer transition-colors",
+              otherParticipant && isOnline(otherParticipant.id) 
+                ? "hover:text-gray-700" 
+                : "opacity-30 cursor-not-allowed"
+            )} 
+            onClick={() => otherParticipant && isOnline(otherParticipant.id) && setActiveCall('video')}
+            title={otherParticipant && isOnline(otherParticipant.id) ? "Video Call" : "User is offline"}
+          />
+          <Phone 
+            className={cn(
+              "w-5 h-5 cursor-pointer transition-colors",
+              otherParticipant && isOnline(otherParticipant.id) 
+                ? "hover:text-gray-700" 
+                : "opacity-30 cursor-not-allowed"
+            )} 
+            onClick={() => otherParticipant && isOnline(otherParticipant.id) && setActiveCall('audio')}
+            title={otherParticipant && isOnline(otherParticipant.id) ? "Audio Call" : "User is offline"}
+          />
           <div className="w-[1px] h-6 bg-gray-300 mx-1" />
           <Search className="w-5 h-5 cursor-pointer hover:text-gray-700" />
           {conversation.is_group && (
@@ -264,9 +347,11 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
       {activeCall && (
         <CallModal 
           type={activeCall}
+          targetUserId={otherParticipant?.id || ''}
           targetName={displayName || ''}
           targetAvatar={displayAvatar || ''}
           onClose={() => setActiveCall(null)}
+          currentUser={currentUser}
         />
       )}
 
