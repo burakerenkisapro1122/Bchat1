@@ -32,23 +32,11 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastTypingBroadcastRef = useRef<number>(0);
   const typingTimeoutsRef = useRef<{ [key: string]: NodeJS.Timeout }>({});
-  const activeChatIdRef = useRef<string>(conversation.id);
-  const messagesRef = useRef<Message[]>([]);
+  const channelRef = useRef<any>(null);
   
   const { isOnline } = usePresence(currentUser.id);
 
-  useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
-
-  useEffect(() => {
-    activeChatIdRef.current = conversation.id;
-    setMessages([]);
-    setHasMore(true);
-    setLoading(true);
-    fetchMessages(true);
-  }, [conversation.id]);
-
+  // Scroll yardımcısı
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     if (scrollRef.current) {
       scrollRef.current.scrollTo({
@@ -58,65 +46,50 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
     }
   }, []);
 
-  const markMessagesAsRead = async () => {
-    try {
-      await supabase
-        .from('messages')
-        .update({ is_read: true })
-        .eq(conversation.is_group ? 'group_id' : 'conversation_id', conversation.id)
-        .neq('sender_id', currentUser.id)
-        .eq('is_read', false);
-    } catch (err) {
-      console.error('Error marking messages as read:', err);
-    }
-  };
-
-  const fetchMessages = async (initial = false) => {
-    const currentChatId = conversation.id;
+  // Mesajları çekme (View üzerinden)
+  const fetchMessages = useCallback(async (initial = false) => {
     if (!initial && (!hasMore || loadingMore)) return;
+    
     if (initial) setLoading(true);
     else setLoadingMore(true);
 
     try {
       let query = supabase
-        .from('messages')
-        .select('*, sender:users(*)')
+        .from('v_messages_with_users') // SQL'de oluşturduğun VIEW adı
+        .select('*')
         .eq(conversation.is_group ? 'group_id' : 'conversation_id', conversation.id)
         .order('created_at', { ascending: false })
         .limit(PAGE_SIZE);
 
-      if (!initial && messagesRef.current.length > 0) {
-        query = query.lt('created_at', messagesRef.current[0].created_at);
+      if (!initial && messages.length > 0) {
+        query = query.lt('created_at', messages[0].created_at);
       }
 
       const { data, error } = await query;
       if (error) throw error;
+      
       const newMessages = (data || []).reverse();
 
-      if (activeChatIdRef.current !== currentChatId) return;
-
-      if (initial) {
-        setMessages(newMessages);
-        setTimeout(() => scrollToBottom('auto'), 50);
-      } else {
-        const currentScrollHeight = scrollRef.current?.scrollHeight || 0;
-        setMessages(prev => [...newMessages, ...prev]);
-        setTimeout(() => {
-          if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight - currentScrollHeight;
-          }
-        }, 0);
-      }
-      
+      setMessages(prev => initial ? newMessages : [...newMessages, ...prev]);
       setHasMore(newMessages.length === PAGE_SIZE);
+      
+      if (initial) setTimeout(() => scrollToBottom('auto'), 50);
     } catch (err) {
       console.error('Error fetching messages:', err);
     } finally {
       setLoading(false);
       setLoadingMore(false);
     }
-  };
+  }, [conversation.id, hasMore, loadingMore, messages, scrollToBottom]);
 
+  // Sohbet değiştiğinde sıfırla
+  useEffect(() => {
+    setMessages([]);
+    setHasMore(true);
+    fetchMessages(true);
+  }, [conversation.id]);
+
+  // Realtime ve Typing
   useEffect(() => {
     const channelId = conversation.is_group ? `group-${conversation.id}` : `chat-${conversation.id}`;
     
@@ -130,12 +103,19 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
 
         if (!isRelated) return;
 
+        // Gönderen bilgisini ekle (Optimistic değilse)
+        if (msg.sender_id !== currentUser.id) {
+           const { data: user } = await supabase.from('users').select('id, username, avatar_url').eq('id', msg.sender_id).single();
+           msg.sender = user;
+        } else {
+           msg.sender = currentUser;
+        }
+
         setMessages(prev => {
           if (prev.some(m => m.id === msg.id || (m.client_id && m.client_id === msg.client_id))) return prev;
           return [...prev, msg];
         });
 
-        if (msg.sender_id !== currentUser.id) markMessagesAsRead();
         setTimeout(() => scrollToBottom('smooth'), 50);
       })
       .on('broadcast', { event: 'typing' }, ({ payload }: any) => {
@@ -149,8 +129,25 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
       })
       .subscribe();
     
+    channelRef.current = channel;
     return () => { supabase.removeChannel(channel); };
-  }, [conversation.id]);
+  }, [conversation.id, currentUser, scrollToBottom]);
+
+  const handleTyping = () => {
+    const now = Date.now();
+    if (now - lastTypingBroadcastRef.current > 2000 && channelRef.current) {
+      channelRef.current.send({
+        type: 'broadcast',
+        event: 'typing',
+        payload: { userId: currentUser.id, username: currentUser.username }
+      });
+      lastTypingBroadcastRef.current = now;
+    }
+  };
+
+  const otherParticipant = useMemo(() => {
+    return !conversation.is_group ? conversation.participants?.find(p => p.user_id !== currentUser.id)?.profile : null;
+  }, [conversation.participants, currentUser.id, conversation.is_group]);
 
   const handleSendMessage = async (e?: React.FormEvent, type: MessageType = 'text') => {
     if (e) e.preventDefault();
@@ -179,19 +176,17 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
     try {
       const messageData = conversation.is_group 
         ? { group_id: conversation.id, sender_id: currentUser.id, content, message_type: type, client_id: clientId }
-        : { conversation_id: conversation.id, sender_id: currentUser.id, content, message_type: type, client_id: clientId };
+        : { conversation_id: conversation.id, sender_id: currentUser.id, content, message_type: type, client_id: clientId, receiver_id: otherParticipant?.id };
 
       const { data, error } = await supabase.from('messages').insert([messageData]).select().single();
       if (error) throw error;
+      
       setMessages(prev => prev.map(m => m.client_id === clientId ? { ...data, sender: currentUser } : m));
     } catch (err) {
+      console.error('Gönderim hatası:', err);
       setMessages(prev => prev.filter(m => m.client_id !== clientId));
     }
   };
-
-  const otherParticipant = useMemo(() => {
-    return !conversation.is_group ? conversation.participants?.find(p => p.user_id !== currentUser.id)?.profile : null;
-  }, [conversation.participants, currentUser.id, conversation.is_group]);
 
   const displayName = conversation.is_group ? conversation.name : otherParticipant?.username;
   const displayAvatar = conversation.is_group 
@@ -200,14 +195,14 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
 
   return (
     <div className="flex-1 flex flex-col h-full bg-[#050505] relative overflow-hidden">
-      {/* Header - Kilitli Yükseklik */}
+      {/* Header */}
       <div className="h-20 flex-shrink-0 bg-bg-main/40 backdrop-blur-2xl flex items-center justify-between px-6 border-b border-white/5 z-20">
         <div className="flex items-center gap-4 cursor-pointer min-w-0" onClick={() => setShowDetails(true)}>
           {onBack && (
             <button onClick={(e) => { e.stopPropagation(); onBack(); }} className="p-2 -ml-2 hover:bg-white/5 rounded-xl text-text-dim md:hidden"><ChevronLeft size={24} /></button>
           )}
           <div className="relative flex-shrink-0">
-            <img src={displayAvatar || ''} className="w-11 h-11 rounded-2xl object-cover border border-white/10" />
+            <img src={displayAvatar || ''} className="w-11 h-11 rounded-2xl object-cover border border-white/10" alt="avatar" />
             {!conversation.is_group && otherParticipant && isOnline(otherParticipant.id) && (
               <div className="absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-green-500 rounded-full border-[3px] border-[#050505]" />
             )}
@@ -229,10 +224,10 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
         </div>
       </div>
 
-      {/* Mesaj Alanı - overflow-y-scroll ile titreme engellendi */}
+      {/* Mesaj Alanı */}
       <div 
         ref={scrollRef} 
-        onScroll={(e) => e.currentTarget.scrollTop === 0 && hasMore && !loadingMore && fetchMessages()}
+        onScroll={(e) => e.currentTarget.scrollTop === 0 && hasMore && !loadingMore && fetchMessages(false)}
         className="flex-1 overflow-y-scroll overflow-x-hidden p-4 md:p-8 lg:px-20 space-y-4 custom-scrollbar bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-brand/5 via-transparent to-transparent"
       >
         <div className="max-w-4xl mx-auto flex flex-col">
@@ -261,7 +256,7 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
           
           <AnimatePresence>
             {typingUsers.length > 0 && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-2 mt-2 ml-2">
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center gap-2 mt-2 ml-2">
                 <div className="flex gap-1"><span className="w-1 h-1 bg-brand rounded-full animate-bounce" /><span className="w-1 h-1 bg-brand rounded-full animate-bounce [animation-delay:0.2s]" /></div>
                 <span className="text-[9px] text-brand font-black uppercase tracking-tighter">{typingUsers[0]} yazıyor...</span>
               </motion.div>
@@ -270,7 +265,7 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
         </div>
       </div>
 
-      {/* Input Alanı - Kilitli Yükseklik ve Form */}
+      {/* Input Alanı */}
       <div className="p-6 bg-bg-main/40 backdrop-blur-md flex-shrink-0">
         <div className="max-w-4xl mx-auto flex items-center gap-2 bg-white/[0.03] border border-white/5 rounded-[2rem] p-1.5 focus-within:border-brand/40 transition-all">
           <button className="p-3 text-text-dim hover:text-brand"><Smile size={20} /></button>
@@ -280,7 +275,7 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
               placeholder="Mesaj gönder..." 
               className="w-full h-10 bg-transparent border-none outline-none text-sm px-2 text-white" 
               value={newMessage} 
-              onChange={(e) => { setNewMessage(e.target.value); if (lastTypingBroadcastRef.current < Date.now() - 2000) { lastTypingBroadcastRef.current = Date.now(); /* Typing broadcast logic here */ } }} 
+              onChange={(e) => { setNewMessage(e.target.value); handleTyping(); }} 
             />
           </form>
           <button 
