@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { supabase, Conversation, Profile } from '../lib/supabase';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { supabase, Conversation, Profile, Message } from '../lib/supabase';
 import { Search, MoreVertical, MessageSquare, Users, LogOut, User, Settings, Check, CheckCheck } from 'lucide-react';
 import { cn, getInitials } from '../lib/utils';
 import GroupModal from './GroupModal';
@@ -24,24 +24,16 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
   const [selectedUserDetails, setSelectedUserDetails] = useState<Profile | null>(null);
   
   const { isOnline } = usePresence(currentUser.id);
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const sortedConversations = useMemo(() => {
     return [...conversations].sort((a, b) => {
-      // If it's a DM, check online status
-      const otherA = !a.is_group ? a.participants?.find(p => p.user_id !== currentUser.id)?.user_id : null;
-      const otherB = !b.is_group ? b.participants?.find(p => p.user_id !== currentUser.id)?.user_id : null;
-      
-      const onlineA = otherA ? isOnline(otherA) : false;
-      const onlineB = otherB ? isOnline(otherB) : false;
-
-      if (onlineA && !onlineB) return -1;
-      if (!onlineA && onlineB) return 1;
-
       const dateA = a.last_message?.created_at || a.created_at;
       const dateB = b.last_message?.created_at || b.created_at;
       return new Date(dateB).getTime() - new Date(dateA).getTime();
     });
-  }, [conversations, isOnline, currentUser.id]);
+  }, [conversations]);
 
   useEffect(() => {
     fetchConversations();
@@ -49,118 +41,126 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
     const refreshHandler = () => fetchConversations();
     window.addEventListener('refresh-conversations', refreshHandler);
 
-    // Subscribe to new messages, participant changes, and group changes
     const channel = supabase
       .channel('sidebar-updates')
-      .on('postgres_changes' as any, { event: '*', table: 'messages', schema: 'public' }, () => {
-        fetchConversations();
+      .on('postgres_changes' as any, { event: 'INSERT', table: 'messages', schema: 'public' }, (payload: any) => {
+        const newMessage = payload.new as Message;
+        setConversations(prev => {
+          return prev.map(conv => {
+            const isMatch = conv.is_group 
+              ? conv.id === newMessage.group_id 
+              : conv.participants?.some(p => p.conversation_id === newMessage.conversation_id);
+            
+            if (isMatch) {
+              return { ...conv, last_message: newMessage };
+            }
+            return conv;
+          }).sort((a, b) => {
+            const dateA = a.last_message?.created_at || a.created_at;
+            const dateB = b.last_message?.created_at || b.created_at;
+            return new Date(dateB).getTime() - new Date(dateA).getTime();
+          });
+        });
       })
-      .on('postgres_changes' as any, { event: '*', table: 'conversation_participants', schema: 'public' }, () => {
-        fetchConversations();
-      })
-      .on('postgres_changes' as any, { event: '*', table: 'groups', schema: 'public' }, () => {
-        fetchConversations();
-      })
-      .on('postgres_changes' as any, { event: '*', table: 'group_members', schema: 'public' }, () => {
-        fetchConversations();
-      })
+      .on('postgres_changes' as any, { event: '*', table: 'conversation_participants', schema: 'public' }, () => fetchConversations())
+      .on('postgres_changes' as any, { event: '*', table: 'groups', schema: 'public' }, () => fetchConversations())
+      .on('postgres_changes' as any, { event: '*', table: 'group_members', schema: 'public' }, () => fetchConversations())
       .subscribe();
 
     return () => {
       window.removeEventListener('refresh-conversations', refreshHandler);
       supabase.removeChannel(channel);
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+      if (abortControllerRef.current) abortControllerRef.current.abort();
     };
   }, []);
 
   const fetchConversations = async () => {
     try {
-      // 1. Fetch DMs
+      // 1. Fetch DMs with participants and last message in one go
       const { data: dmData, error: dmError } = await supabase
         .from('conversation_participants')
         .select(`
           conversation_id,
-          conversations (
+          conversations:conversations (
             id,
-            created_at
+            created_at,
+            participants:conversation_participants (
+              user_id,
+              profile:users (*)
+            ),
+            messages:messages (
+              id,
+              content,
+              created_at,
+              sender_id,
+              is_read
+            )
           )
         `)
         .eq('user_id', currentUser.id);
 
       if (dmError) throw dmError;
 
-      const dms = await Promise.all(
-        dmData.map(async (item: any) => {
-          const conv = item.conversations;
-          
-          const { data: participants } = await supabase
-            .from('conversation_participants')
-            .select('user_id, user:users(*)')
-            .eq('conversation_id', conv.id);
+      const dms = (dmData || []).map((item: any) => {
+        const conv = item.conversations;
+        // Get the latest message
+        const sortedMessages = (conv.messages || []).sort((a: any, b: any) => 
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
+        
+        return {
+          ...conv,
+          is_group: false,
+          participants: conv.participants || [],
+          last_message: sortedMessages[0]
+        };
+      });
 
-          const { data: lastMessages } = await supabase
-            .from('messages')
-            .select('*')
-            .eq('conversation_id', conv.id)
-            .order('created_at', { ascending: false })
-            .limit(1);
-
-          return {
-            ...conv,
-            is_group: false,
-            participants: participants?.map(p => ({ ...p, profile: p.user })) || [],
-            last_message: lastMessages?.[0]
-          };
-        })
-      );
-
-      // 2. Fetch Groups
+      // 2. Fetch Groups with members and last message in one go
       const { data: groupData, error: groupError } = await supabase
         .from('group_members')
         .select(`
           group_id,
-          groups (
+          groups:groups (
             id,
             name,
             created_at,
-            owner_id
+            owner_id,
+            avatar_url,
+            members:group_members (
+              user_id,
+              profile:users (*)
+            ),
+            messages:messages (
+              id,
+              content,
+              created_at,
+              sender_id,
+              is_read
+            )
           )
         `)
         .eq('user_id', currentUser.id);
 
       if (groupError) throw groupError;
 
-      const groups = await Promise.all(
-        groupData.map(async (item: any) => {
-          const group = item.groups;
-          
-          const { data: members } = await supabase
-            .from('group_members')
-            .select('user_id, user:users(*)')
-            .eq('group_id', group.id);
+      const groups = (groupData || []).map((item: any) => {
+        const group = item.groups;
+        const sortedMessages = (group.messages || []).sort((a: any, b: any) => 
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
 
-          const { data: lastMessages } = await supabase
-            .from('messages')
-            .select('*')
-            .eq('group_id', group.id)
-            .order('created_at', { ascending: false })
-            .limit(1);
-
-          return {
-            ...group,
-            is_group: true,
-            participants: members?.map(m => ({ ...m, profile: m.user })) || [],
-            last_message: lastMessages?.[0]
-          };
-        })
-      );
+        return {
+          ...group,
+          is_group: true,
+          participants: group.members || [],
+          last_message: sortedMessages[0]
+        };
+      });
 
       const allConvs = [...dms, ...groups];
-
-      setConversations(allConvs.sort((a, b) => {
-        const dateA = a.last_message?.created_at || a.created_at;
-        const dateB = b.last_message?.created_at || b.created_at;
-        return new Date(dateB).getTime() - new Date(dateA).getTime();
-      }));
+      setConversations(allConvs);
     } catch (err) {
       console.error('Error fetching conversations:', err);
     } finally {
@@ -168,30 +168,48 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
     }
   };
 
-  const handleSearch = async (query: string) => {
+  const handleSearch = (query: string) => {
     setSearchQuery(query);
+    
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    if (abortControllerRef.current) abortControllerRef.current.abort();
+
     if (query.length < 2) {
       setSearchResults([]);
       return;
     }
 
-    const { data } = await supabase
-      .from('users')
-      .select('*')
-      .ilike('username', `%${query}%`)
-      .eq('is_visible', true)
-      .neq('id', currentUser.id)
-      .limit(10);
+    searchTimeoutRef.current = setTimeout(async () => {
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
 
-    const sortedResults = (data || []).sort((a, b) => {
-      const onlineA = isOnline(a.id);
-      const onlineB = isOnline(b.id);
-      if (onlineA && !onlineB) return -1;
-      if (!onlineA && onlineB) return 1;
-      return 0;
-    });
+      try {
+        const { data, error } = await supabase
+          .from('users')
+          .select('*')
+          .ilike('username', `%${query}%`)
+          .eq('is_visible', true)
+          .neq('id', currentUser.id)
+          .limit(10);
 
-    setSearchResults(sortedResults);
+        if (error) throw error;
+        if (controller.signal.aborted) return;
+
+        const sortedResults = (data || []).sort((a, b) => {
+          const onlineA = isOnline(a.id);
+          const onlineB = isOnline(b.id);
+          if (onlineA && !onlineB) return -1;
+          if (!onlineA && onlineB) return 1;
+          return 0;
+        });
+
+        setSearchResults(sortedResults);
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          console.error('Search error:', err);
+        }
+      }
+    }, 250);
   };
 
   const startDM = async (targetUser: Profile) => {
@@ -232,28 +250,41 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
   };
 
   return (
-    <div className="w-full md:w-[400px] h-full flex flex-col bg-white border-r border-gray-200">
+    <div className="w-full md:w-[380px] h-full flex flex-col bg-bg-sidebar border-r border-border-subtle">
       {/* Header */}
-      <div className="h-[60px] bg-[#f0f2f5] flex items-center justify-between px-4 py-2">
+      <div className="h-20 flex items-center justify-between px-6 border-b border-border-subtle">
         <div 
-          className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
+          className="flex items-center gap-3 cursor-pointer group"
           onClick={() => setShowProfileModal(true)}
         >
-          <img
-            src={currentUser.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.username}`}
-            alt={currentUser.username}
-            className="w-10 h-10 rounded-full object-cover"
-          />
-          <span className="font-medium text-gray-700">{currentUser.username}</span>
+          <div className="relative">
+            <img
+              src={currentUser.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.username}`}
+              alt={currentUser.username}
+              className="w-10 h-10 rounded-xl object-cover ring-2 ring-transparent group-hover:ring-brand/30 transition-all"
+            />
+            <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-brand border-2 border-bg-sidebar rounded-full"></div>
+          </div>
+          <div className="flex flex-col">
+            <span className="font-semibold text-sm tracking-tight">{currentUser.username}</span>
+            <span className="text-[10px] text-brand uppercase font-bold tracking-widest opacity-80">Online</span>
+          </div>
         </div>
-        <div className="flex items-center gap-4 text-gray-500">
-          <Users 
-            className="w-6 h-6 cursor-pointer hover:text-gray-700" 
+        <div className="flex items-center gap-2">
+          <button 
             onClick={() => setShowGroupModal(true)}
-            title="Groups" 
-          />
-          <MessageSquare className="w-6 h-6 cursor-pointer hover:text-gray-700" title="New Chat" />
-          <LogOut className="w-6 h-6 cursor-pointer hover:text-gray-700" onClick={handleLogout} title="Logout" />
+            className="p-2 hover:bg-white/5 rounded-lg text-text-dim hover:text-white transition-colors"
+            title="New Group"
+          >
+            <Users className="w-5 h-5" />
+          </button>
+          <button 
+            onClick={handleLogout}
+            className="p-2 hover:bg-white/5 rounded-lg text-text-dim hover:text-red-400 transition-colors"
+            title="Logout"
+          >
+            <LogOut className="w-5 h-5" />
+          </button>
         </div>
       </div>
 
@@ -282,13 +313,13 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
       )}
 
       {/* Search */}
-      <div className="p-2 bg-white">
-        <div className="relative bg-[#f0f2f5] rounded-lg flex items-center px-3 py-1.5">
-          <Search className="w-5 h-5 text-gray-500 mr-3" />
+      <div className="px-6 py-4">
+        <div className="relative group">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-dim group-focus-within:text-brand transition-colors" />
           <input
             type="text"
-            placeholder="Search or start new chat"
-            className="bg-transparent w-full outline-none text-sm py-1"
+            placeholder="Search conversations..."
+            className="w-full bg-white/5 border border-transparent focus:border-brand/30 focus:bg-white/10 rounded-xl pl-10 pr-4 py-2.5 text-sm outline-none transition-all placeholder:text-text-dim/50"
             value={searchQuery}
             onChange={(e) => handleSearch(e.target.value)}
           />
@@ -297,39 +328,44 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
 
       {/* Search Results */}
       {searchResults.length > 0 && (
-        <div className="absolute top-[110px] left-0 w-[400px] bg-white shadow-lg z-10 border-b border-gray-200">
-          <p className="px-4 py-2 text-xs font-bold text-[#00a884] uppercase">Users</p>
-          {searchResults.map((user) => (
-            <div
-              key={user.id}
-              className="flex items-center gap-3 px-4 py-3 hover:bg-[#f5f6f6] cursor-pointer"
-              onClick={() => startDM(user)}
-            >
-              <div className="relative">
-                <img src={user.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.username}`} className="w-12 h-12 rounded-full" />
-                {isOnline(user.id) && (
-                  <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-[#25d366] border-2 border-white rounded-full"></div>
-                )}
+        <div className="absolute top-[160px] left-0 w-full md:w-[380px] bg-bg-card/95 backdrop-blur-xl shadow-2xl z-20 border-b border-border-subtle premium-shadow">
+          <p className="px-6 py-3 text-[10px] font-bold text-brand uppercase tracking-widest border-b border-border-subtle">Global Search</p>
+          <div className="max-h-[400px] overflow-y-auto">
+            {searchResults.map((user) => (
+              <div
+                key={user.id}
+                className="flex items-center gap-4 px-6 py-4 hover:bg-white/5 cursor-pointer transition-colors"
+                onClick={() => startDM(user)}
+              >
+                <div className="relative">
+                  <img src={user.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.username}`} className="w-11 h-11 rounded-xl object-cover" />
+                  {isOnline(user.id) && (
+                    <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-brand border-2 border-bg-card rounded-full"></div>
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm">{user.username}</p>
+                  <p className="text-xs text-text-dim truncate">{user.bio || 'Available'}</p>
+                </div>
               </div>
-              <div className="flex-1 border-b border-gray-100 pb-3">
-                <p className="font-medium">{user.username}</p>
-                <p className="text-sm text-gray-500 truncate">{user.bio || 'Hey there! I am using B-Chat.'}</p>
-              </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       )}
 
       {/* Chat List */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto px-3 space-y-1">
         {loading ? (
-          <div className="flex justify-center p-4">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#25d366]"></div>
+          <div className="flex justify-center p-8">
+            <div className="w-6 h-6 border-2 border-brand/30 border-t-brand rounded-full animate-spin"></div>
           </div>
         ) : sortedConversations.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full p-8 text-center text-gray-500">
-            <MessageSquare className="w-12 h-12 mb-4 opacity-20" />
-            <p>No chats yet. Search for someone to start talking!</p>
+          <div className="flex flex-col items-center justify-center h-full p-8 text-center">
+            <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center mb-4">
+              <MessageSquare className="w-8 h-8 text-text-dim opacity-20" />
+            </div>
+            <p className="text-sm text-text-dim font-medium">No conversations yet</p>
+            <p className="text-xs text-text-dim/50 mt-1">Start a new chat to begin</p>
           </div>
         ) : (
           sortedConversations.map((conv) => {
@@ -343,40 +379,54 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
               : otherParticipant?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${otherParticipant?.username}`;
 
             const isOtherOnline = !conv.is_group && otherParticipant ? isOnline(otherParticipant.id) : false;
+            const isSelected = selectedConversationId === conv.id;
 
             return (
               <div
                 key={conv.id}
                 className={cn(
-                  "flex items-center gap-3 px-4 py-3 hover:bg-[#f5f6f6] cursor-pointer transition-colors",
-                  selectedConversationId === conv.id && "bg-[#ebebeb]"
+                  "group flex items-center gap-4 px-4 py-3.5 rounded-2xl cursor-pointer transition-all relative overflow-hidden",
+                  isSelected ? "bg-white/5 active-gradient" : "hover:bg-white/[0.02]"
                 )}
                 onClick={() => onSelectConversation(conv)}
               >
-                <div className="relative">
-                  <img src={displayAvatar || ''} className="w-12 h-12 rounded-full object-cover" />
+                {isSelected && (
+                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-brand rounded-r-full shadow-[0_0_10px_rgba(16,185,129,0.5)]"></div>
+                )}
+                
+                <div className="relative flex-shrink-0">
+                  <img src={displayAvatar || ''} className="w-12 h-12 rounded-xl object-cover ring-1 ring-white/10" />
                   {isOtherOnline && (
-                    <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-[#25d366] border-2 border-white rounded-full"></div>
+                    <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-brand border-2 border-bg-sidebar rounded-full shadow-lg"></div>
                   )}
                 </div>
-                <div className="flex-1 border-b border-gray-100 pb-3 min-w-0">
-                  <div className="flex justify-between items-center mb-1">
-                    <p className="font-medium truncate">{displayName}</p>
+                
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-baseline mb-1">
+                    <p className={cn(
+                      "text-sm font-semibold truncate transition-colors",
+                      isSelected ? "text-white" : "text-white/90 group-hover:text-white"
+                    )}>
+                      {displayName}
+                    </p>
                     {conv.last_message && (
-                      <span className="text-xs text-gray-500">
+                      <span className="text-[10px] font-medium text-text-dim/60 tabular-nums">
                         {new Date(conv.last_message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-1">
+                  
+                  <div className="flex items-center gap-1.5">
                     {conv.last_message && conv.last_message.sender_id === currentUser.id && (
-                      conv.last_message.is_read ? (
-                        <CheckCheck className="w-4 h-4 text-[#53bdeb]" />
-                      ) : (
-                        <Check className="w-4 h-4 text-gray-400" />
-                      )
+                      <div className="flex-shrink-0">
+                        {conv.last_message.is_read ? (
+                          <CheckCheck className="w-3.5 h-3.5 text-brand" />
+                        ) : (
+                          <Check className="w-3.5 h-3.5 text-text-dim/40" />
+                        )}
+                      </div>
                     )}
-                    <p className="text-sm text-gray-500 truncate">
+                    <p className="text-xs text-text-dim truncate leading-relaxed">
                       {conv.last_message ? conv.last_message.content : 'No messages yet'}
                     </p>
                   </div>

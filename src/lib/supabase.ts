@@ -57,10 +57,11 @@ export type GroupMember = {
   profile?: Profile;
 };
 
-export type MessageType = 'text' | 'image' | 'video' | 'audio';
+export type MessageType = 'text' | 'image' | 'video' | 'audio' | 'call';
 
 export type Message = {
   id: string;
+  client_id?: string; // For optimistic matching
   conversation_id: string | null;
   group_id: string | null;
   sender_id: string;
