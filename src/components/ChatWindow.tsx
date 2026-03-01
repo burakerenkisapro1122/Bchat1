@@ -86,6 +86,18 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
         const updatedMsg = payload.new as Message;
         setMessages(prev => prev.map(m => m.id === updatedMsg.id ? { ...m, is_read: updatedMsg.is_read } : m));
       })
+      .on('postgres_changes' as any, {
+        event: 'DELETE',
+        table: 'messages',
+        schema: 'public',
+        filter: conversation.is_group
+          ? `group_id=eq.${conversation.id}`
+          : `conversation_id=eq.${conversation.id}`
+      }, (payload: any) => {
+        const deletedMessageId = payload.old?.id as string;
+        if (!deletedMessageId) return;
+        setMessages(prev => prev.filter(m => m.id !== deletedMessageId));
+      })
       .on('broadcast' as any, { event: 'typing' }, ({ payload }: any) => {
         if (payload.userId !== currentUser.id) {
           setTypingUsers(prev => {
@@ -164,7 +176,7 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
         .order('created_at', { ascending: true });
 
       if (error) throw error;
-      setMessages(data || []);
+      setMessages((data || []).sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()));
     } catch (err) {
       console.error('Error fetching messages:', err);
     } finally {
@@ -198,7 +210,7 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
       
       // If not replacing or not found, just append if not already there
       if (prev.some(m => m.id === msg.id)) return prev;
-      return [...prev, { ...msg, sender: profile }];
+      return [...prev, { ...msg, sender: profile }].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
     });
   };
 
@@ -225,7 +237,7 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
       group_id: conversation.is_group ? conversation.id : undefined
     };
     
-    setMessages(prev => [...prev, optimisticMsg]);
+    setMessages(prev => [...prev, optimisticMsg].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()));
 
     try {
       const messageData = conversation.is_group 
