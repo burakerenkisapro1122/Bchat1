@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { supabase, Conversation, Message, Profile, MessageType } from '../lib/supabase';
-import { Send, Smile, Paperclip, MoreVertical, Phone, Video, Search, Image as ImageIcon, Film, X, Settings } from 'lucide-react';
+import { Send, Smile, Paperclip, MoreVertical, Phone, Video, Search, Image as ImageIcon, Film, X, Settings, ChevronLeft } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { format } from 'date-fns';
 import DetailsModal from './DetailsModal';
@@ -13,11 +13,12 @@ interface ChatWindowProps {
   conversation: Conversation;
   currentUser: Profile;
   onUpdateConversation?: () => void;
+  onBack?: () => void;
 }
 
 const PAGE_SIZE = 30;
 
-export default function ChatWindow({ conversation, currentUser, onUpdateConversation }: ChatWindowProps) {
+export default function ChatWindow({ conversation, currentUser, onUpdateConversation, onBack }: ChatWindowProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(true);
@@ -243,19 +244,19 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
 
   const MessageBubble = React.memo(({ msg, isMe, showSender }: { msg: Message, isMe: boolean, showSender: boolean }) => (
     <div ref={el => { messageRefs.current[msg.id] = el; }} data-message-id={msg.id} className={cn("flex w-full group animate-in fade-in slide-in-from-bottom-2", isMe ? "justify-end" : "justify-start")}>
-      <div className={cn("flex flex-col max-w-[80%] md:max-w-[70%]", isMe ? "items-end" : "items-start")}>
+      <div className={cn("flex flex-col max-w-[85%] md:max-w-[70%]", isMe ? "items-end" : "items-start")}>
         {showSender && <span className="text-[10px] font-bold text-brand uppercase tracking-widest mb-1.5 ml-1">{msg.sender?.username}</span>}
-        <div className={cn("px-4 py-3 rounded-2xl shadow-sm relative", isMe ? "bg-brand text-white rounded-tr-none" : "bg-bg-card text-white/90 rounded-tl-none border border-border-subtle")}>
+        <div className={cn("px-3 py-2 md:px-4 md:py-3 rounded-2xl shadow-sm relative", isMe ? "bg-brand text-white rounded-tr-none" : "bg-bg-card text-white/90 rounded-tl-none border border-border-subtle")}>
           {msg.message_type === 'call' ? (
-            <div className="flex items-center gap-3 py-1">
-              <Phone className="w-4 h-4" />
-              <p className="text-[13px] font-bold italic">{msg.content}</p>
+            <div className="flex items-center gap-2 md:gap-3 py-1">
+              <Phone className="w-3.5 h-3.5 md:w-4 md:h-4" />
+              <p className="text-[12px] md:text-[13px] font-bold italic">{msg.content}</p>
             </div>
           ) : (
-            <p className="text-[14px] break-words font-medium">{msg.content}</p>
+            <p className="text-[13px] md:text-[14px] break-words font-medium">{msg.content}</p>
           )}
-          <div className={cn("flex items-center gap-1.5 mt-2 opacity-60", isMe ? "justify-end" : "justify-start")}>
-            <span className="text-[9px] font-bold">{format(new Date(msg.created_at), 'HH:mm')}</span>
+          <div className={cn("flex items-center gap-1.5 mt-1.5 md:mt-2 opacity-60", isMe ? "justify-end" : "justify-start")}>
+            <span className="text-[8px] md:text-[9px] font-bold">{format(new Date(msg.created_at), 'HH:mm')}</span>
             {isMe && (msg.is_read ? <CheckCheck className="w-3 h-3 text-white" /> : <Check className="w-3 h-3 text-white/50" />)}
           </div>
         </div>
@@ -264,65 +265,75 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
   ));
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-bg-main relative overflow-hidden">
+    <div className="flex-1 flex flex-col h-full bg-bg-main relative overflow-hidden overflow-x-hidden">
       {/* Header */}
-      <div className="h-20 bg-bg-main/80 backdrop-blur-xl flex items-center justify-between px-6 border-b border-border-subtle z-20">
-        <div className="flex items-center gap-4 cursor-pointer" onClick={() => setShowDetails(true)}>
-          <img src={displayAvatar || ''} className="w-11 h-11 rounded-xl object-cover" />
-          <div>
-            <p className="font-bold text-sm text-white">{displayName}</p>
-            <span className="text-[10px] text-text-dim font-semibold uppercase tracking-widest">
-              {!conversation.is_group && otherParticipant && isOnline(otherParticipant.id) ? 'Online' : 'Offline'}
-            </span>
+      <div className="h-16 md:h-20 bg-bg-main/80 backdrop-blur-xl flex items-center justify-between px-4 md:px-6 border-b border-border-subtle z-20">
+        <div className="flex items-center gap-2 md:gap-4 cursor-pointer min-w-0">
+          {onBack && (
+            <button 
+              onClick={(e) => { e.stopPropagation(); onBack(); }}
+              className="p-1.5 -ml-1 hover:bg-white/5 rounded-lg text-text-dim md:hidden"
+            >
+              <ChevronLeft className="w-6 h-6" />
+            </button>
+          )}
+          <div className="flex items-center gap-2 md:gap-4 min-w-0" onClick={() => setShowDetails(true)}>
+            <img src={displayAvatar || ''} className="w-9 h-9 md:w-11 md:h-11 rounded-xl object-cover flex-shrink-0" />
+            <div className="min-w-0">
+              <p className="font-bold text-sm text-white truncate max-w-[100px] sm:max-w-[150px] md:max-w-none">{displayName}</p>
+              <span className="text-[10px] text-text-dim font-semibold uppercase tracking-widest block truncate">
+                {!conversation.is_group && otherParticipant && isOnline(otherParticipant.id) ? 'Online' : 'Offline'}
+              </span>
+            </div>
           </div>
         </div>
         
         {/* 🔥 DÜZELTİLEN CALL BUTONLARI */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center bg-white/5 rounded-xl p-1 border border-white/5">
+        <div className="flex items-center gap-1.5 md:gap-3">
+          <div className="flex items-center bg-white/5 rounded-xl p-0.5 md:p-1 border border-white/5">
             <button 
-              className="p-2 rounded-lg transition-all text-brand hover:bg-brand/10 hover:text-brand-light active:scale-95"
+              className="p-1.5 md:p-2 rounded-lg transition-all text-brand hover:bg-brand/10 hover:text-brand-light active:scale-95"
               onClick={() => { setActiveCall('video'); handleSendMessage(undefined, undefined, 'call'); }}
             >
-              <Video className="w-5 h-5" />
+              <Video className="w-4 h-4 md:w-5 md:h-5" />
             </button>
             <button 
-              className="p-2 rounded-lg transition-all text-brand hover:bg-brand/10 hover:text-brand-light active:scale-95"
+              className="p-1.5 md:p-2 rounded-lg transition-all text-brand hover:bg-brand/10 hover:text-brand-light active:scale-95"
               onClick={() => { setActiveCall('audio'); handleSendMessage(undefined, undefined, 'call'); }}
             >
-              <Phone className="w-5 h-5" />
+              <Phone className="w-4 h-4 md:w-5 md:h-5" />
             </button>
           </div>
-          <div className="w-px h-6 bg-border-subtle mx-1" />
-          <div className="flex items-center gap-1">
-            <button className="p-2 hover:bg-white/5 rounded-lg text-text-dim hover:text-white"><Search className="w-5 h-5" /></button>
-            {conversation.is_group && <button className="p-2 hover:bg-white/5 rounded-lg text-text-dim hover:text-white" onClick={() => setShowGroupSettings(true)}><Settings className="w-5 h-5" /></button>}
-            <button className="p-2 hover:bg-white/5 rounded-lg text-text-dim hover:text-white"><MoreVertical className="w-5 h-5" /></button>
+          <div className="w-px h-5 md:h-6 bg-border-subtle mx-0.5 md:mx-1" />
+          <div className="flex items-center gap-0.5 md:gap-1">
+            <button className="p-1.5 md:p-2 hover:bg-white/5 rounded-lg text-text-dim hover:text-white"><Search className="w-4 h-4 md:w-5 md:h-5" /></button>
+            {conversation.is_group && <button className="p-1.5 md:p-2 hover:bg-white/5 rounded-lg text-text-dim hover:text-white" onClick={() => setShowGroupSettings(true)}><Settings className="w-4 h-4 md:w-5 md:h-5" /></button>}
+            <button className="p-1.5 md:p-2 hover:bg-white/5 rounded-lg text-text-dim hover:text-white"><MoreVertical className="w-4 h-4 md:w-5 md:h-5" /></button>
           </div>
         </div>
       </div>
 
-      {showDetails && <DetailsModal type={conversation.is_group ? 'group' : 'user'} data={conversation.is_group ? conversation : otherParticipant!} onClose={() => setShowDetails(false)} />}
+      {showDetails && <DetailsModal type={conversation.is_group ? 'group' : 'user'} data={conversation.is_group ? (conversation as any) : otherParticipant!} onClose={() => setShowDetails(false)} />}
       {showGroupSettings && <GroupSettingsModal group={conversation} currentUser={currentUser} onClose={() => setShowGroupSettings(false)} onUpdate={() => onUpdateConversation?.()} />}
       {activeCall && <CallModal type={activeCall} targetUserId={otherParticipant?.id || ''} targetName={displayName || ''} targetAvatar={displayAvatar || ''} onClose={() => setActiveCall(null)} currentUser={currentUser} />}
 
-      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-6 md:px-12 scroll-smooth">
+      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-4 md:p-6 lg:px-12 scroll-smooth">
         {loading ? <div className="flex justify-center items-center h-full">Yükleniyor...</div> : (
-          <div className="max-w-4xl mx-auto space-y-4">
+          <div className="max-w-4xl mx-auto space-y-3 md:space-y-4">
             {messages.map(msg => <MessageBubble key={msg.id} msg={msg} isMe={msg.sender_id === currentUser.id} showSender={conversation.is_group && msg.sender_id !== currentUser.id} />)}
             {typingUsers.length > 0 && <div className="text-[10px] text-brand animate-pulse uppercase font-bold tracking-widest">{typingUsers[0]} yazıyor...</div>}
           </div>
         )}
       </div>
 
-      <div className="px-6 py-6 bg-bg-main">
-        <div className="max-w-4xl mx-auto flex items-end gap-3 bg-bg-card border border-border-subtle rounded-2xl p-2 premium-shadow">
-          <button className="p-2 text-text-dim hover:text-brand"><Smile className="w-5 h-5" /></button>
+      <div className="px-4 py-4 md:px-6 md:py-6 bg-bg-main">
+        <div className="max-w-4xl mx-auto flex items-end gap-2 md:gap-3 bg-bg-card border border-border-subtle rounded-2xl p-1.5 md:p-2 premium-shadow">
+          <button className="p-1.5 md:p-2 text-text-dim hover:text-brand"><Smile className="w-5 h-5" /></button>
           <form onSubmit={handleSendMessage} className="flex-1 mb-1">
-            <input type="text" placeholder="Type your message..." className="w-full bg-transparent border-none outline-none text-sm py-2 px-2 text-white placeholder:text-text-dim/40" value={newMessage} onChange={(e) => { setNewMessage(e.target.value); handleTyping(); }} />
+            <input type="text" placeholder="Type your message..." className="w-full bg-transparent border-none outline-none text-xs md:text-sm py-2 px-1 md:px-2 text-white placeholder:text-text-dim/40" value={newMessage} onChange={(e) => { setNewMessage(e.target.value); handleTyping(); }} />
           </form>
-          <button onClick={() => handleSendMessage()} disabled={!newMessage.trim()} className={cn("p-3 rounded-xl", newMessage.trim() ? "bg-brand text-white shadow-lg" : "bg-white/5 text-text-dim/30")}>
-            <Send className="w-5 h-5" />
+          <button onClick={() => handleSendMessage()} disabled={!newMessage.trim()} className={cn("p-2.5 md:p-3 rounded-xl transition-all", newMessage.trim() ? "bg-brand text-white shadow-lg active:scale-95" : "bg-white/5 text-text-dim/30")}>
+            <Send className="w-4 h-4 md:w-5 md:h-5" />
           </button>
         </div>
       </div>

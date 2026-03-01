@@ -252,38 +252,38 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
   return (
     <div className="w-full md:w-[380px] h-full flex flex-col bg-bg-sidebar border-r border-border-subtle">
       {/* Header */}
-      <div className="h-20 flex items-center justify-between px-6 border-b border-border-subtle">
+      <div className="h-16 md:h-20 flex items-center justify-between px-4 md:px-6 border-b border-border-subtle">
         <div 
-          className="flex items-center gap-3 cursor-pointer group"
+          className="flex items-center gap-2 md:gap-3 cursor-pointer group"
           onClick={() => setShowProfileModal(true)}
         >
           <div className="relative">
             <img
               src={currentUser.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.username}`}
               alt={currentUser.username}
-              className="w-10 h-10 rounded-xl object-cover ring-2 ring-transparent group-hover:ring-brand/30 transition-all"
+              className="w-9 h-9 md:w-10 md:h-10 rounded-xl object-cover ring-2 ring-transparent group-hover:ring-brand/30 transition-all"
             />
-            <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-brand border-2 border-bg-sidebar rounded-full"></div>
+            <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 md:w-3 md:h-3 bg-brand border-2 border-bg-sidebar rounded-full"></div>
           </div>
           <div className="flex flex-col">
-            <span className="font-semibold text-sm tracking-tight">{currentUser.username}</span>
-            <span className="text-[10px] text-brand uppercase font-bold tracking-widest opacity-80">Online</span>
+            <span className="font-semibold text-xs md:text-sm tracking-tight truncate max-w-[80px] md:max-w-none">{currentUser.username}</span>
+            <span className="text-[8px] md:text-[10px] text-brand uppercase font-bold tracking-widest opacity-80">Online</span>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 md:gap-2">
           <button 
             onClick={() => setShowGroupModal(true)}
-            className="p-2 hover:bg-white/5 rounded-lg text-text-dim hover:text-white transition-colors"
+            className="p-1.5 md:p-2 hover:bg-white/5 rounded-lg text-text-dim hover:text-white transition-colors"
             title="New Group"
           >
-            <Users className="w-5 h-5" />
+            <Users className="w-4 h-4 md:w-5 md:h-5" />
           </button>
           <button 
             onClick={handleLogout}
-            className="p-2 hover:bg-white/5 rounded-lg text-text-dim hover:text-red-400 transition-colors"
+            className="p-1.5 md:p-2 hover:bg-white/5 rounded-lg text-text-dim hover:text-red-400 transition-colors"
             title="Logout"
           >
-            <LogOut className="w-5 h-5" />
+            <LogOut className="w-4 h-4 md:w-5 md:h-5" />
           </button>
         </div>
       </div>
@@ -313,13 +313,13 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
       )}
 
       {/* Search */}
-      <div className="px-6 py-4">
+      <div className="px-4 py-3 md:px-6 md:py-4">
         <div className="relative group">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-dim group-focus-within:text-brand transition-colors" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 md:w-4 md:h-4 text-text-dim group-focus-within:text-brand transition-colors" />
           <input
             type="text"
             placeholder="Search conversations..."
-            className="w-full bg-white/5 border border-transparent focus:border-brand/30 focus:bg-white/10 rounded-xl pl-10 pr-4 py-2.5 text-sm outline-none transition-all placeholder:text-text-dim/50"
+            className="w-full bg-white/5 border border-transparent focus:border-brand/30 focus:bg-white/10 rounded-xl pl-9 md:pl-10 pr-4 py-2 md:py-2.5 text-xs md:text-sm outline-none transition-all placeholder:text-text-dim/50"
             value={searchQuery}
             onChange={(e) => handleSearch(e.target.value)}
           />
@@ -385,7 +385,7 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
               <div
                 key={conv.id}
                 className={cn(
-                  "group flex items-center gap-4 px-4 py-3.5 rounded-2xl cursor-pointer transition-all relative overflow-hidden",
+                  "group flex items-center gap-3 md:gap-4 px-3 py-3 md:px-4 md:py-3.5 rounded-2xl cursor-pointer transition-all relative overflow-hidden",
                   isSelected ? "bg-white/5 active-gradient" : "hover:bg-white/[0.02]"
                 )}
                 onClick={() => onSelectConversation(conv)}
@@ -395,9 +395,9 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
                 )}
                 
                 <div className="relative flex-shrink-0">
-                  <img src={displayAvatar || ''} className="w-12 h-12 rounded-xl object-cover ring-1 ring-white/10" />
+                  <img src={displayAvatar || ''} className="w-10 h-10 md:w-12 md:h-12 rounded-xl object-cover ring-1 ring-white/10" />
                   {isOtherOnline && (
-                    <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-brand border-2 border-bg-sidebar rounded-full shadow-lg"></div>
+                    <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 md:w-3.5 md:h-3.5 bg-brand border-2 border-bg-sidebar rounded-full shadow-lg"></div>
                   )}
                 </div>
                 

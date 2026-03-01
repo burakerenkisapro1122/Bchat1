@@ -4,7 +4,8 @@ import Auth from './components/Auth';
 import Sidebar from './components/Sidebar';
 import ChatWindow from './components/ChatWindow';
 import CallModal from './components/CallModal';
-import { MessageSquare } from 'lucide-react';
+import { cn } from './lib/utils';
+import { MessageSquare, ChevronLeft } from 'lucide-react';
 import { getPeer } from './lib/peer';
 import { MediaConnection, Peer } from 'peerjs';
 
@@ -99,54 +100,64 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen w-screen flex bg-bg-main overflow-hidden">
-      <div className="flex w-full h-full overflow-hidden">
-        <Sidebar 
-          currentUser={profile} 
-          onSelectConversation={setSelectedConversation}
-          onUpdateProfile={setProfile}
-          selectedConversationId={selectedConversation?.id}
-        />
+    <div className="h-screen w-screen flex bg-bg-main overflow-hidden overflow-x-hidden">
+      <div className="flex w-full h-full overflow-hidden relative">
+        {/* Sidebar container with mobile responsiveness */}
+        <div className={cn(
+          "h-full border-r border-border-subtle transition-all duration-300 ease-in-out z-30 flex-shrink-0",
+          selectedConversation ? "hidden md:block w-[380px]" : "w-full md:w-[380px]"
+        )}>
+          <Sidebar 
+            currentUser={profile} 
+            onSelectConversation={setSelectedConversation}
+            onUpdateProfile={setProfile}
+            selectedConversationId={selectedConversation?.id}
+          />
+        </div>
         
-        <div className="flex-1 flex flex-col bg-bg-main relative">
+        {/* Chat area with mobile responsiveness */}
+        <div className={cn(
+          "flex-1 flex flex-col bg-bg-main relative h-full min-w-0",
+          !selectedConversation ? "hidden md:flex" : "flex"
+        )}>
           {selectedConversation ? (
             <ChatWindow 
               conversation={selectedConversation} 
               currentUser={profile} 
               onUpdateConversation={() => {
-                // Trigger sidebar refresh
                 window.dispatchEvent(new CustomEvent('refresh-conversations'));
               }}
+              onBack={() => setSelectedConversation(null)}
             />
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-center p-12 bg-bg-main relative overflow-hidden">
+            <div className="flex-1 flex flex-col items-center justify-center text-center p-6 md:p-12 bg-bg-main relative overflow-hidden">
               {/* Decorative Background Elements */}
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-brand/5 rounded-full blur-[120px] pointer-events-none"></div>
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] md:w-[500px] h-[300px] md:h-[500px] bg-brand/5 rounded-full blur-[80px] md:blur-[120px] pointer-events-none"></div>
               
-              <div className="max-w-md relative z-10">
-                <div className="w-24 h-24 bg-white/5 rounded-[2rem] flex items-center justify-center mb-8 mx-auto ring-1 ring-white/10 shadow-2xl rotate-12 hover:rotate-0 transition-transform duration-500">
-                  <MessageSquare className="w-10 h-10 text-brand" />
+              <div className="max-w-md relative z-10 px-4">
+                <div className="w-20 h-20 md:w-24 md:h-24 bg-white/5 rounded-[1.5rem] md:rounded-[2rem] flex items-center justify-center mb-6 md:mb-8 mx-auto ring-1 ring-white/10 shadow-2xl rotate-12 hover:rotate-0 transition-transform duration-500">
+                  <MessageSquare className="w-8 h-8 md:w-10 md:h-10 text-brand" />
                 </div>
-                <h1 className="text-4xl font-bold text-white mb-4 tracking-tight">Select a conversation</h1>
-                <p className="text-sm text-text-dim leading-relaxed font-medium opacity-60">
-                  Choose a chat from the sidebar to start messaging.<br />
+                <h1 className="text-2xl md:text-4xl font-bold text-white mb-3 md:mb-4 tracking-tight">Select a conversation</h1>
+                <p className="text-xs md:text-sm text-text-dim leading-relaxed font-medium opacity-60">
+                  Choose a chat from the sidebar to start messaging.<br className="hidden md:block" />
                   Your conversations are secured with end-to-end encryption.
                 </p>
                 
-                <div className="mt-12 flex flex-wrap items-center justify-center gap-4">
-                  <div className="px-4 py-2 bg-white/5 rounded-full border border-white/5 text-[10px] font-bold text-text-dim uppercase tracking-widest">
+                <div className="mt-8 md:mt-12 flex flex-wrap items-center justify-center gap-2 md:gap-4">
+                  <div className="px-3 py-1.5 md:px-4 md:py-2 bg-white/5 rounded-full border border-white/5 text-[8px] md:text-[10px] font-bold text-text-dim uppercase tracking-widest">
                     Real-time Sync
                   </div>
-                  <div className="px-4 py-2 bg-white/5 rounded-full border border-white/5 text-[10px] font-bold text-text-dim uppercase tracking-widest">
+                  <div className="px-3 py-1.5 md:px-4 md:py-2 bg-white/5 rounded-full border border-white/5 text-[8px] md:text-[10px] font-bold text-text-dim uppercase tracking-widest">
                     P2P Calling
                   </div>
-                  <div className="px-4 py-2 bg-white/5 rounded-full border border-white/5 text-[10px] font-bold text-text-dim uppercase tracking-widest">
+                  <div className="px-3 py-1.5 md:px-4 md:py-2 bg-white/5 rounded-full border border-white/5 text-[8px] md:text-[10px] font-bold text-text-dim uppercase tracking-widest">
                     Group Chats
                   </div>
                 </div>
               </div>
               
-              <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-2 text-text-dim/30 text-[10px] font-bold uppercase tracking-[0.3em]">
+              <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-2 text-text-dim/30 text-[8px] md:text-[10px] font-bold uppercase tracking-[0.3em] whitespace-nowrap">
                 <div className="w-1 h-1 bg-brand rounded-full"></div>
                 <span>Premium Communication Suite</span>
               </div>
