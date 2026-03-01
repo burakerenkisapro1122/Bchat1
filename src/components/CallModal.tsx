@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Phone, Video, X, Mic, MicOff, Video as VideoIcon, VideoOff, PhoneOff, User } from 'lucide-react';
+import { Phone, Video, Mic, MicOff, Video as VideoIcon, VideoOff, PhoneOff, User, Maximize2 } from 'lucide-react';
 import { MediaConnection } from 'peerjs';
 import { Profile } from '../lib/supabase';
 import { getPeer } from '../lib/peer';
 import { cn } from '../lib/utils';
+import { motion, AnimatePresence } from 'framer-motion';
 
 interface CallModalProps {
   type: 'audio' | 'video';
@@ -20,18 +21,33 @@ export default function CallModal({ type, targetUserId, targetName, targetAvatar
   const [status, setStatus] = useState(incomingCall ? 'Gelen Arama...' : 'Aranıyor...');
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(type === 'audio');
+  const [isSwapped, setIsSwapped] = useState(false); 
   const [duration, setDuration] = useState(0);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [isAnswered, setIsAnswered] = useState(false);
-  
+
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const callRef = useRef<MediaConnection | null>(incomingCall || null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
-
-  // Sesin her durumda çalması için ref
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
+
+  // --- KRİTİK DÜZELTME: Akış Bağlama Mantığı ---
+  useEffect(() => {
+    // 1. Kendi görüntümüzü bağla
+    if (localStream) {
+      const targetRef = isSwapped ? remoteVideoRef : localVideoRef;
+      if (targetRef.current) targetRef.current.srcObject = localStream;
+    }
+    
+    // 2. Karşı tarafın görüntüsünü bağla (Sadece varsa)
+    if (remoteStream) {
+      const targetRef = isSwapped ? localVideoRef : remoteVideoRef;
+      if (targetRef.current) targetRef.current.srcObject = remoteStream;
+      if (remoteAudioRef.current) remoteAudioRef.current.srcObject = remoteStream;
+    }
+  }, [localStream, remoteStream, isSwapped]);
 
   useEffect(() => {
     const startCall = async () => {
@@ -41,21 +57,9 @@ export default function CallModal({ type, targetUserId, targetName, targetAvatar
           audio: true
         });
         setLocalStream(stream);
-        
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream;
-        }
 
         const peer = getPeer(currentUser.id);
         if (!peer) return;
-
-        const errorHandler = (err: any) => {
-          if (err.type === 'peer-unavailable') {
-            setStatus('Ulaşılamıyor');
-            setTimeout(onClose, 3000);
-          }
-        };
-        peer.on('error', errorHandler);
 
         if (incomingCall) {
           callRef.current = incomingCall;
@@ -63,60 +67,29 @@ export default function CallModal({ type, targetUserId, targetName, targetAvatar
           const call = peer.call(targetUserId, stream, { metadata: { type } });
           callRef.current = call;
           handleCall(call);
-
-          const timeout = setTimeout(() => {
-            if (callStatus === 'calling') {
-              setStatus('Cevap verilmedi');
-              setTimeout(onClose, 2000);
-            }
-          }, 30000);
-
-          return () => {
-            clearTimeout(timeout);
-            peer.off('error', errorHandler);
-          };
         }
       } catch (err) {
-        console.error('Erişim hatası:', err);
-        setStatus('Erişim reddedildi');
+        setStatus('Kamera/Mikrofon erişimi reddedildi');
       }
     };
 
     startCall();
-
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
-      if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-      }
-      if (callRef.current) {
-        callRef.current.close();
-      }
+      if (localStream) localStream.getTracks().forEach(t => t.stop());
+      if (callRef.current) callRef.current.close();
     };
-  }, [targetUserId, type]);
+  }, []);
 
   const handleCall = (call: MediaConnection) => {
     call.on('stream', (rStream) => {
       setRemoteStream(rStream);
-      
-      // KRİTİK: Hem ses hem video elementi için stream bağlanmalı
-      if (remoteVideoRef.current && type === 'video') {
-        remoteVideoRef.current.srcObject = rStream;
-      }
-      if (remoteAudioRef.current) {
-        remoteAudioRef.current.srcObject = rStream;
-      }
-
       setCallStatus('in-call');
       setStatus('Bağlandı');
-      
       if (!timerRef.current) {
-        timerRef.current = setInterval(() => {
-          setDuration(prev => prev + 1);
-        }, 1000);
+        timerRef.current = setInterval(() => setDuration(prev => prev + 1), 1000);
       }
     });
-
     call.on('close', onClose);
   };
 
@@ -128,20 +101,6 @@ export default function CallModal({ type, targetUserId, targetName, targetAvatar
     }
   };
 
-  const toggleMute = () => {
-    if (localStream) {
-      localStream.getAudioTracks().forEach(t => t.enabled = !t.enabled);
-      setIsMuted(!isMuted);
-    }
-  };
-
-  const toggleVideo = () => {
-    if (localStream && type === 'video') {
-      localStream.getVideoTracks().forEach(t => t.enabled = !t.enabled);
-      setIsVideoOff(!isVideoOff);
-    }
-  };
-
   const formatDuration = (s: number) => {
     const mins = Math.floor(s / 60);
     const secs = s % 60;
@@ -149,74 +108,118 @@ export default function CallModal({ type, targetUserId, targetName, targetAvatar
   };
 
   return (
-    <div className="fixed inset-0 bg-bg-main z-[100] flex flex-col items-center justify-between p-6 md:p-12 text-white overflow-hidden">
-      {/* Gizli Ses Elementi (Sadece Sesli Aramalar veya Yedek İçin) */}
+    <div className="fixed inset-0 bg-black z-[100] flex flex-col items-center justify-between text-white overflow-hidden">
       <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
 
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-brand/5 rounded-full blur-[150px] pointer-events-none"></div>
-      
-      {type === 'video' && remoteStream && (
+      {/* --- BÜYÜK GÖRÜNTÜ (ARKA PLAN) --- */}
+      <div className="absolute inset-0 w-full h-full z-0 bg-bg-main">
         <video
-          ref={remoteVideoRef}
+          ref={isSwapped ? localVideoRef : remoteVideoRef}
           autoPlay
           playsInline
-          className={cn("absolute inset-0 w-full h-full object-cover transition-opacity duration-1000", isVideoOff ? "opacity-0" : "opacity-40")}
-        />
-      )}
-
-      {/* Üst Kısım: Profil ve Durum */}
-      <div className="relative z-10 flex flex-col items-center gap-4 md:gap-6 mt-8 md:mt-16">
-        <div className="relative group">
-          <div className="absolute inset-0 bg-brand/20 rounded-3xl md:rounded-[3rem] blur-2xl group-hover:bg-brand/30 transition-all duration-500"></div>
-          <img src={targetAvatar} className="w-24 h-24 md:w-40 md:h-40 rounded-3xl md:rounded-[3rem] object-cover border-4 border-white/10 shadow-2xl relative z-10" />
-          
-          {type === 'video' && localStream && (
-            <div className="absolute -bottom-4 -right-4 md:-bottom-6 md:-right-6 w-24 h-32 md:w-32 md:h-44 bg-bg-card rounded-2xl border border-white/10 overflow-hidden shadow-2xl z-20 group-hover:scale-110 transition-transform">
-              <video ref={localVideoRef} autoPlay muted playsInline className={cn("w-full h-full object-cover", isVideoOff && "hidden")} />
-              {isVideoOff && <div className="w-full h-full flex items-center justify-center bg-bg-card"><User className="w-8 h-8 md:w-10 md:h-10 text-text-dim/20" /></div>}
-            </div>
+          muted={isSwapped} // Arka planda sen varsan sesini kapat
+          className={cn(
+            "w-full h-full object-cover transition-opacity duration-700",
+            // Eğer swap yoksa ve karşıdan yayın gelmediyse büyük videoyu gizle (Avatar kalsın)
+            (!isSwapped && !remoteStream) || (isSwapped && isVideoOff) ? "opacity-0" : "opacity-100"
           )}
-        </div>
+        />
         
-        <div className="text-center space-y-1 md:space-y-2 relative z-10">
-          <h2 className="text-2xl md:text-4xl font-bold tracking-tight text-white truncate max-w-[250px] md:max-w-none">{targetName}</h2>
-          <div className="flex items-center justify-center gap-2 md:gap-3">
-            <div className={cn("w-1.5 h-1.5 md:w-2 md:h-2 rounded-full", callStatus === 'in-call' ? "bg-brand animate-pulse" : "bg-red-500 animate-bounce")}></div>
-            <p className="text-brand font-bold uppercase tracking-[0.2em] md:tracking-[0.3em] text-[10px] md:text-xs">
-              {callStatus === 'in-call' ? formatDuration(duration) : status}
-            </p>
+        {/* Karşı tarafın görüntüsü yoksa veya swap durumunda senin videon kapalıysa avatar göster */}
+        {((!isSwapped && !remoteStream) || (isSwapped && isVideoOff)) && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-bg-main/60 backdrop-blur-3xl">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}>
+              <img src={targetAvatar} className="w-32 h-32 md:w-48 md:h-48 rounded-full border-4 border-white/10" />
+            </motion.div>
+            <h2 className="text-2xl md:text-4xl font-bold mt-8">{targetName}</h2>
+            <p className="text-brand font-bold tracking-widest mt-2 animate-pulse">{status}</p>
           </div>
-        </div>
+        )}
       </div>
 
-      {/* Alt Kısım: Kontroller */}
-      <div className="relative z-10 flex items-center gap-4 md:gap-6 mb-8 md:mb-16 px-6 py-3 md:px-8 md:py-4 bg-white/5 backdrop-blur-2xl rounded-3xl md:rounded-[2.5rem] border border-white/10 shadow-2xl">
-        {callStatus === 'calling' && incomingCall && !isAnswered ? (
-          <div className="flex items-center gap-4 md:gap-6">
-            <button onClick={answerCall} className="w-16 h-16 md:w-20 md:h-20 bg-brand text-white rounded-2xl md:rounded-3xl flex items-center justify-center shadow-lg hover:scale-110 animate-pulse transition-all">
-              {type === 'video' ? <VideoIcon className="w-7 h-7 md:w-8 md:h-8" /> : <Phone className="w-7 h-7 md:w-8 md:h-8" />}
-            </button>
-            <button onClick={onClose} className="w-16 h-16 md:w-20 md:h-20 bg-red-500 text-white rounded-2xl md:rounded-3xl flex items-center justify-center shadow-lg hover:scale-110 transition-all">
-              <PhoneOff className="w-7 h-7 md:w-8 md:h-8" />
-            </button>
+      {/* --- KÜÇÜK GÖRÜNTÜ (SÜRÜKLENEBİLİR) --- */}
+      {type === 'video' && (
+        <motion.div
+          drag
+          dragConstraints={{ left: -400, right: 0, top: 0, bottom: 600 }}
+          whileDrag={{ scale: 1.05 }}
+          onClick={() => setIsSwapped(!isSwapped)}
+          className="absolute top-8 right-8 w-28 h-40 md:w-40 md:h-56 bg-bg-card rounded-2xl md:rounded-3xl border-2 border-white/20 overflow-hidden shadow-2xl z-50 cursor-pointer group"
+        >
+          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
+            <Maximize2 className="w-6 h-6" />
           </div>
-        ) : (
-          <>
-            <button onClick={toggleMute} className={cn("w-12 h-12 md:w-14 md:h-14 rounded-xl md:rounded-2xl flex items-center justify-center transition-all", isMuted ? 'bg-white text-bg-main shadow-xl' : 'bg-white/5 text-white hover:bg-white/10')}>
-              {isMuted ? <MicOff className="w-5 h-5 md:w-6 md:h-6" /> : <Mic className="w-5 h-5 md:w-6 md:h-6" />}
-            </button>
-
-            {type === 'video' && (
-              <button onClick={toggleVideo} className={cn("w-12 h-12 md:w-14 md:h-14 rounded-xl md:rounded-2xl flex items-center justify-center transition-all", isVideoOff ? 'bg-white text-bg-main shadow-xl' : 'bg-white/5 text-white hover:bg-white/10')}>
-                {isVideoOff ? <VideoOff className="w-5 h-5 md:w-6 md:h-6" /> : <VideoIcon className="w-5 h-5 md:w-6 md:h-6" />}
-              </button>
+          <video
+            ref={isSwapped ? remoteVideoRef : localVideoRef}
+            autoPlay
+            playsInline
+            muted={!isSwapped} // Küçük ekranda sen varsan yankı olmasın diye mute'la
+            className={cn(
+              "w-full h-full object-cover", 
+              (!isSwapped && isVideoOff) || (isSwapped && !remoteStream) ? "hidden" : "block"
             )}
+          />
+          {/* İçerik yoksa ikon göster */}
+          {((!isSwapped && isVideoOff) || (isSwapped && !remoteStream)) && (
+            <div className="w-full h-full flex items-center justify-center bg-bg-card">
+              <User className="w-10 h-10 text-white/10" />
+            </div>
+          )}
+        </motion.div>
+      )}
 
-            <button onClick={onClose} className="w-12 h-12 md:w-14 md:h-14 bg-red-500 text-white rounded-xl md:rounded-2xl flex items-center justify-center shadow-lg hover:scale-110 active:scale-95 transition-all">
-              <PhoneOff className="w-5 h-5 md:w-6 md:h-6" />
-            </button>
-          </>
+      {/* --- KONTROLLER --- */}
+      <div className="relative z-[60] flex flex-col items-center gap-6 mb-12 w-full px-6">
+        {callStatus === 'in-call' && (
+          <div className="bg-black/40 backdrop-blur-xl px-4 py-1.5 rounded-full border border-white/10 text-xs font-bold tracking-widest text-brand">
+            {formatDuration(duration)}
+          </div>
         )}
+
+        <div className="flex items-center gap-4 md:gap-6 p-4 bg-white/5 backdrop-blur-3xl rounded-[2.5rem] border border-white/10 shadow-2xl">
+          {callStatus === 'calling' && incomingCall && !isAnswered ? (
+            <div className="flex gap-4">
+              <button onClick={answerCall} className="w-16 h-16 bg-brand text-white rounded-2xl flex items-center justify-center shadow-lg hover:scale-110 animate-bounce">
+                <VideoIcon />
+              </button>
+              <button onClick={onClose} className="w-16 h-16 bg-red-500 text-white rounded-2xl flex items-center justify-center shadow-lg hover:scale-110">
+                <PhoneOff />
+              </button>
+            </div>
+          ) : (
+            <>
+              <button 
+                onClick={() => {
+                  if (localStream) {
+                    localStream.getAudioTracks().forEach(t => t.enabled = !t.enabled);
+                    setIsMuted(!isMuted);
+                  }
+                }} 
+                className={cn("w-14 h-14 rounded-2xl flex items-center justify-center transition-all", isMuted ? 'bg-white text-black' : 'bg-white/10 text-white hover:bg-white/20')}
+              >
+                {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+              </button>
+
+              <button onClick={onClose} className="w-14 h-14 bg-red-500 text-white rounded-2xl flex items-center justify-center shadow-xl hover:scale-110 active:scale-95 transition-all">
+                <PhoneOff className="w-6 h-6" />
+              </button>
+
+              {type === 'video' && (
+                <button 
+                  onClick={() => {
+                    if (localStream) {
+                      localStream.getVideoTracks().forEach(t => t.enabled = !t.enabled);
+                      setIsVideoOff(!isVideoOff);
+                    }
+                  }} 
+                  className={cn("w-14 h-14 rounded-2xl flex items-center justify-center transition-all", isVideoOff ? 'bg-white text-black' : 'bg-white/10 text-white hover:bg-white/20')}
+                >
+                  {isVideoOff ? <VideoOff className="w-6 h-6" /> : <VideoIcon className="w-6 h-6" />}
+                </button>
+              )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
