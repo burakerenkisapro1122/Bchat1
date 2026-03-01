@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase, Conversation, Profile } from '../lib/supabase';
 import { Search, MoreVertical, MessageSquare, Users, LogOut, User, Settings, Check, CheckCheck } from 'lucide-react';
 import { cn, getInitials } from '../lib/utils';
@@ -18,12 +18,14 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Profile[]>([]);
+  const [searching, setSearching] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [selectedUserDetails, setSelectedUserDetails] = useState<Profile | null>(null);
   
   const { isOnline } = usePresence(currentUser.id);
+  const searchDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
   const sortedConversations = useMemo(() => {
     return [...conversations].sort((a, b) => {
@@ -168,12 +170,14 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
     }
   };
 
-  const handleSearch = async (query: string) => {
-    setSearchQuery(query);
+  const searchUsers = async (query: string) => {
     if (query.length < 2) {
       setSearchResults([]);
+      setSearching(false);
       return;
     }
+
+    setSearching(true);
 
     const { data } = await supabase
       .from('users')
@@ -192,7 +196,39 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
     });
 
     setSearchResults(sortedResults);
+    setSearching(false);
   };
+
+  useEffect(() => {
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+    }
+
+    searchDebounceRef.current = setTimeout(() => {
+      searchUsers(searchQuery);
+    }, 250);
+
+    return () => {
+      if (searchDebounceRef.current) {
+        clearTimeout(searchDebounceRef.current);
+      }
+    };
+  }, [searchQuery]);
+
+  useEffect(() => {
+    if (searchQuery.length < 2) return;
+
+    const channel = supabase
+      .channel(`search-realtime-${currentUser.id}`)
+      .on('postgres_changes' as any, { event: '*', table: 'users', schema: 'public' }, () => {
+        searchUsers(searchQuery);
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [searchQuery, currentUser.id]);
 
   const startDM = async (targetUser: Profile) => {
     // Check if DM already exists
@@ -290,10 +326,14 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
             placeholder="Search or start new chat"
             className="bg-transparent w-full outline-none text-sm py-1"
             value={searchQuery}
-            onChange={(e) => handleSearch(e.target.value)}
+            onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
       </div>
+
+      {searching && searchQuery.length >= 2 && (
+        <div className="px-4 py-2 text-xs text-gray-500">Searching...</div>
+      )}
 
       {/* Search Results */}
       {searchResults.length > 0 && (
