@@ -9,6 +9,35 @@ import GroupSettingsModal from './GroupSettingsModal';
 import { usePresence } from '../lib/usePresence';
 import { motion, AnimatePresence } from 'framer-motion';
 
+// --- LİNK DÖNÜŞTÜRÜCÜ BİLEŞEN ---
+const LinkifiedText = ({ text }: { text: string }) => {
+  // URL tespiti için güvenli regex
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  const parts = text.split(urlRegex);
+
+  return (
+    <span className="whitespace-pre-wrap break-words">
+      {parts.map((part, i) => (
+        urlRegex.test(part) ? (
+          <a
+            key={i}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            // LinkifiedText içindeki <a> etiketinin className kısmını şöyle değiştir:
+            className="text-cyan-400 hover:text-cyan-300 underline decoration-cyan-400/30 underline-offset-4 transition-colors font-semibold shadow-[0_0_10px_rgba(34,211,238,0.2)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {part}
+          </a>
+        ) : (
+          part
+        )
+      ))}
+    </span>
+  );
+};
+
 interface ChatWindowProps {
   conversation: Conversation;
   currentUser: Profile;
@@ -36,7 +65,6 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
   
   const { isOnline } = usePresence(currentUser.id);
 
-  // Scroll yardımcısı
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     if (scrollRef.current) {
       scrollRef.current.scrollTo({
@@ -46,16 +74,14 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
     }
   }, []);
 
-  // Mesajları çekme (View üzerinden)
   const fetchMessages = useCallback(async (initial = false) => {
     if (!initial && (!hasMore || loadingMore)) return;
-    
     if (initial) setLoading(true);
     else setLoadingMore(true);
 
     try {
       let query = supabase
-        .from('v_messages_with_users') // SQL'de oluşturduğun VIEW adı
+        .from('v_messages_with_users')
         .select('*')
         .eq(conversation.is_group ? 'group_id' : 'conversation_id', conversation.id)
         .order('created_at', { ascending: false })
@@ -69,10 +95,8 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
       if (error) throw error;
       
       const newMessages = (data || []).reverse();
-
       setMessages(prev => initial ? newMessages : [...newMessages, ...prev]);
       setHasMore(newMessages.length === PAGE_SIZE);
-      
       if (initial) setTimeout(() => scrollToBottom('auto'), 50);
     } catch (err) {
       console.error('Error fetching messages:', err);
@@ -82,17 +106,14 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
     }
   }, [conversation.id, hasMore, loadingMore, messages, scrollToBottom]);
 
-  // Sohbet değiştiğinde sıfırla
   useEffect(() => {
     setMessages([]);
     setHasMore(true);
     fetchMessages(true);
   }, [conversation.id]);
 
-  // Realtime ve Typing
   useEffect(() => {
     const channelId = conversation.is_group ? `group-${conversation.id}` : `chat-${conversation.id}`;
-    
     const channel = supabase
       .channel(channelId)
       .on('postgres_changes', { event: 'INSERT', table: 'messages', schema: 'public' }, async (payload: any) => {
@@ -103,7 +124,6 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
 
         if (!isRelated) return;
 
-        // Gönderen bilgisini ekle (Optimistic değilse)
         if (msg.sender_id !== currentUser.id) {
            const { data: user } = await supabase.from('users').select('id, username, avatar_url').eq('id', msg.sender_id).single();
            msg.sender = user;
@@ -180,7 +200,6 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
 
       const { data, error } = await supabase.from('messages').insert([messageData]).select().single();
       if (error) throw error;
-      
       setMessages(prev => prev.map(m => m.client_id === clientId ? { ...data, sender: currentUser } : m));
     } catch (err) {
       console.error('Gönderim hatası:', err);
@@ -243,7 +262,9 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
                     "px-4 py-2.5 rounded-2xl text-[14px] font-medium relative border transition-all",
                     isMe ? "bg-brand text-white rounded-tr-none border-white/10" : "bg-white/5 text-white/90 rounded-tl-none border-white/5"
                   )}>
-                    {msg.content}
+                    {/* LinkifiedText kütüphanemizi burada kullandık */}
+                    <LinkifiedText text={msg.content} />
+                    
                     <div className={cn("flex items-center gap-1 mt-1 opacity-30 text-[9px]", isMe ? "justify-end" : "justify-start")}>
                       {format(new Date(msg.created_at), 'HH:mm')}
                       {isMe && (msg.is_read ? <CheckCheck size={12} className="text-blue-400" /> : <Check size={12} />)}
@@ -288,7 +309,6 @@ export default function ChatWindow({ conversation, currentUser, onUpdateConversa
         </div>
       </div>
 
-      {/* Modallar */}
       {showDetails && <DetailsModal type={conversation.is_group ? 'group' : 'user'} data={conversation.is_group ? conversation : otherParticipant!} onClose={() => setShowDetails(false)} />}
       {activeCall && <CallModal type={activeCall} targetUserId={otherParticipant?.id || ''} targetName={displayName || ''} targetAvatar={displayAvatar || ''} onClose={() => setActiveCall(null)} currentUser={currentUser} />}
     </div>
