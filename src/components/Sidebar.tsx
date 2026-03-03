@@ -4,7 +4,6 @@ import { Search, MessageSquare, Users, LogOut, Check, CheckCheck, Bell } from 'l
 import { cn } from '../lib/utils';
 import GroupModal from './GroupModal';
 import ProfileModal from './ProfileModal';
-import DetailsModal from './DetailsModal';
 import { usePresence } from '../lib/usePresence';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -23,15 +22,13 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
   const [loading, setLoading] = useState(true);
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
-  const [selectedUserDetails, setSelectedUserDetails] = useState<Profile | null>(null);
   
   const { isOnline } = usePresence(currentUser.id);
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // 1. Konuşmaları ve Okunmamış Sayılarını Getir
+  // 1. Konuşmaları Getir
   const fetchConversations = async () => {
     try {
-      // DMs
       const { data: dmData } = await supabase
         .from('conversation_participants')
         .select(`
@@ -44,7 +41,6 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
         `)
         .eq('user_id', currentUser.id);
 
-      // Groups
       const { data: groupData } = await supabase
         .from('group_members')
         .select(`
@@ -71,10 +67,14 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
         last_message: (item.groups.messages || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0]
       }));
 
-      const allConvs = [...dms, ...groups];
+      const allConvs = [...dms, ...groups].sort((a, b) => {
+        const timeA = a.last_message ? new Date(a.last_message.created_at).getTime() : 0;
+        const timeB = b.last_message ? new Date(b.last_message.created_at).getTime() : 0;
+        return timeB - timeA;
+      });
+
       setConversations(allConvs);
 
-      // Okunmamış sayılarını hesapla
       const counts: { [key: string]: number } = {};
       allConvs.forEach(conv => {
         const unread = (conv.messages || []).filter((m: any) => !m.is_read && m.sender_id !== currentUser.id).length;
@@ -91,30 +91,80 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
 
   useEffect(() => {
     fetchConversations();
-
-    // Realtime Dinleyici: Yeni mesaj geldiğinde listeyi güncelle
     const channel = supabase
       .channel('sidebar-realtime')
       .on('postgres_changes', { event: 'INSERT', table: 'messages', schema: 'public' }, (payload) => {
         const msg = payload.new as Message;
         const convId = msg.conversation_id || msg.group_id;
-
-        // Eğer mesajı biz atmadıysak ve o an o chat açık değilse sayıyı artır
         if (msg.sender_id !== currentUser.id && convId !== selectedConversationId) {
           setUnreadCounts(prev => ({ ...prev, [convId!]: (prev[convId!] || 0) + 1 }));
         }
-        
-        fetchConversations(); // Listeyi ve son mesajı tazele
+        fetchConversations();
       })
       .on('postgres_changes', { event: 'UPDATE', table: 'messages', schema: 'public' }, () => {
-        fetchConversations(); // Okundu bilgisi gelince tazele
+        fetchConversations();
       })
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
   }, [selectedConversationId]);
 
-  // Arama Fonksiyonu
+  // Yeni Fonksiyon: DM Başlat veya Mevcut Olanı Aç
+  const startDM = async (targetUser: Profile) => {
+    try {
+      setSearchResults([]);
+      setSearchQuery('');
+
+      // 1. Zaten bir DM var mı kontrol et
+      const existingConv = conversations.find(c => 
+        !c.is_group && c.participants?.some(p => p.user_id === targetUser.id)
+      );
+
+      if (existingConv) {
+        onSelectConversation(existingConv);
+        return;
+      }
+
+      // 2. Yoksa yeni bir konuşma oluştur
+      const { data: newConv, error: convError } = await supabase
+        .from('conversations')
+        .insert({})
+        .select()
+        .single();
+
+      if (convError) throw convError;
+
+      // 3. Katılımcıları ekle (Ben ve Karşı taraf)
+      const participants = [
+        { conversation_id: newConv.id, user_id: currentUser.id },
+        { conversation_id: newConv.id, user_id: targetUser.id }
+      ];
+
+      const { error: partError } = await supabase
+        .from('conversation_participants')
+        .insert(participants);
+
+      if (partError) throw partError;
+
+      // 4. Listeyi tazele ve yeni konuşmayı seç
+      await fetchConversations();
+      
+      // Yeni oluşan konuşmayı nesne olarak bulup seçelim
+      const createdConv: Conversation = {
+        ...newConv,
+        is_group: false,
+        participants: [
+            { user_id: currentUser.id, profile: currentUser },
+            { user_id: targetUser.id, profile: targetUser }
+        ]
+      };
+      onSelectConversation(createdConv);
+
+    } catch (err) {
+      console.error('DM başlatma hatası:', err);
+    }
+  };
+
   const handleSearch = (query: string) => {
     setSearchQuery(query);
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
@@ -137,12 +187,8 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
 
   return (
     <div className="w-full md:w-[400px] h-full flex flex-col bg-[#080808] border-r border-white/5 relative z-30">
-      {/* Profil Header */}
       <div className="p-6 flex items-center justify-between">
-        <div 
-          className="flex items-center gap-3 cursor-pointer group"
-          onClick={() => setShowProfileModal(true)}
-        >
+        <div className="flex items-center gap-3 cursor-pointer group" onClick={() => setShowProfileModal(true)}>
           <div className="relative">
             <img
               src={currentUser.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.username}`}
@@ -166,7 +212,6 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
         </div>
       </div>
 
-      {/* Modern Search */}
       <div className="px-6 pb-4">
         <div className="relative group">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-white/20 group-focus-within:text-brand transition-colors" />
@@ -180,7 +225,6 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
         </div>
       </div>
 
-      {/* Arama Sonuçları Overlay */}
       <AnimatePresence>
         {searchResults.length > 0 && (
           <motion.div 
@@ -192,22 +236,20 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
             {searchResults.map(user => (
               <div 
                 key={user.id}
-                onClick={() => {
-                   // startDM(user) fonksiyonunu burada tetikle
-                   setSearchResults([]);
-                   setSearchQuery('');
-                }}
+                onClick={() => startDM(user)} // BURADA START DM ÇALIŞIR
                 className="flex items-center gap-3 p-4 hover:bg-brand/10 cursor-pointer transition-colors border-b border-white/5 last:border-none"
               >
-                <img src={user.avatar_url || ''} className="w-9 h-9 rounded-xl" />
-                <span className="text-sm font-bold text-white">{user.username}</span>
+                <img src={user.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.username}`} className="w-9 h-9 rounded-xl object-cover" />
+                <div className="flex flex-col">
+                  <span className="text-sm font-bold text-white">{user.username}</span>
+                  <span className="text-[10px] text-brand/60 font-bold uppercase tracking-widest">Mesaj Gönder</span>
+                </div>
               </div>
             ))}
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Chat Listesi */}
       <div className="flex-1 overflow-y-auto px-4 space-y-2 custom-scrollbar">
         {loading ? (
           <div className="flex flex-col items-center justify-center h-40 opacity-20">
@@ -225,7 +267,7 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
                 whileHover={{ x: 4 }}
                 onClick={() => {
                   onSelectConversation(conv);
-                  setUnreadCounts(prev => ({ ...prev, [conv.id]: 0 })); // Okundu say
+                  setUnreadCounts(prev => ({ ...prev, [conv.id]: 0 }));
                 }}
                 className={cn(
                   "group flex items-center gap-4 p-4 rounded-[1.5rem] cursor-pointer transition-all duration-300 relative",
@@ -236,7 +278,7 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
               >
                 <div className="relative flex-shrink-0">
                   <img 
-                    src={conv.is_group ? conv.avatar_url : otherUser?.avatar_url} 
+                    src={conv.is_group ? conv.avatar_url : otherUser?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${otherUser?.username}`} 
                     className={cn("w-12 h-12 rounded-2xl object-cover", isSelected ? "ring-2 ring-brand" : "ring-1 ring-white/10")} 
                   />
                   {!conv.is_group && isOnline(otherUser?.id || '') && (
@@ -283,7 +325,6 @@ export default function Sidebar({ currentUser, onSelectConversation, onUpdatePro
         )}
       </div>
 
-      {/* Modalları Buraya Ekle (Props'tan gelenler) */}
       {showGroupModal && <GroupModal currentUser={currentUser} onClose={() => setShowGroupModal(false)} onSuccess={fetchConversations} />}
       {showProfileModal && <ProfileModal currentUser={currentUser} onClose={() => setShowProfileModal(false)} onUpdate={onUpdateProfile} />}
     </div>
